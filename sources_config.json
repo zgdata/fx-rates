@@ -1,0 +1,6 @@
+{
+  "_comment": "Sources listed here are skipped (status 'skipped', no stale carry-over). Key = <ISO2>/<source id>.",
+  "disabled": {
+    "VN/vietinbank": "HTTP 405 'Not Allowed' from GitHub Actions runners (works from other networks)"
+  }
+}

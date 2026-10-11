@@ -285,10 +285,15 @@ def tcb_fetch():
 _TCB_CACHE = {}
 
 
+import threading
+_LOCK = threading.Lock()
+
+
 def tcb_data():
-    if "d" not in _TCB_CACHE:
-        _TCB_CACHE["d"] = tcb_fetch()
-    return _TCB_CACHE["d"]
+    with _LOCK:
+        if "d" not in _TCB_CACHE:
+            _TCB_CACHE["d"] = tcb_fetch()
+        return _TCB_CACHE["d"]
 
 
 def sbv_central_via_tcb():
@@ -464,6 +469,466 @@ def fawaz(iso_codes):
     raise last
 
 
+# ======================================================= WORLD (added countries)
+def _cells(tr):
+    return [re.sub(r"\s+", " ", htmllib.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+            for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, re.S | re.I)]
+
+
+def _rows(html_text):
+    return [_cells(tr) for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html_text, re.S | re.I)]
+
+
+def lrow(unit=1, middle=None, tb=None, ts=None, cb=None, cs=None, compute_mid=True):
+    """Row from 'local per `unit` foreign' numbers; middle computed from transfer (or cash) if missing."""
+    middle, tb, ts, cb, cs = [num(v) if isinstance(v, (int, float)) else v for v in (middle, tb, ts, cb, cs)]
+    if middle is None and compute_mid:
+        if tb and ts:
+            middle = (tb + ts) / 2
+        elif cb and cs:
+            middle = (cb + cs) / 2
+    return mk_row(unit, middle, tb, ts, cb, cs)
+
+
+_ECB_CACHE = {}
+
+
+def ecb_cached():
+    with _LOCK:
+        if "d" not in _ECB_CACHE:
+            _ECB_CACHE["d"] = ecb()
+        return _ECB_CACHE["d"]
+
+
+def ecb_as_central(note=None):
+    def fn():
+        d = ecb_cached()
+        rates = {c: mk_row(1, inv(v)) for c, v in d["rates_per_eur"].items() if c != "EUR"}
+        out = {"valid_for": d["valid_for"], "middle_source": "published", "rates": rates}
+        if note:
+            out["note"] = note
+        return out
+    return fn
+
+
+# --- Poland: NBP
+def nbp():
+    a = get("https://api.nbp.pl/api/exchangerates/tables/A/?format=json").json()[0]
+    c = get("https://api.nbp.pl/api/exchangerates/tables/C/?format=json").json()[0]
+    bidask = {x["code"]: x for x in c["rates"]}
+    rates = {}
+    for x in a["rates"]:
+        ba = bidask.get(x["code"], {})
+        rates[x["code"]] = lrow(1, x["mid"], ba.get("bid"), ba.get("ask"), compute_mid=False)
+    return {"valid_for": a["effectiveDate"], "list_number": a["no"], "middle_source": "published",
+            "note": "mid = tabela A; buy/sell = tabela C (NBP kupno/sprzedaż)", "rates": rates}
+
+
+# --- Czechia: CNB + Komerční banka
+def cnb():
+    url = "https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/denni_kurz.txt"
+    lines = get(url).text.strip().splitlines()
+    day = dt.datetime.strptime(lines[0].split()[0], "%d.%m.%Y").date().isoformat()
+    rates = {}
+    for l in lines[2:]:
+        p = l.split("|")
+        if len(p) == 5:
+            rates[p[3]] = lrow(int(p[2]), num(p[4], "comma"), compute_mid=False)
+    return {"valid_for": day, "middle_source": "published", "rates": rates}
+
+
+def kb_cz():
+    url = "https://www.kb.cz/cs/kurzovni-listek"
+    h = get(url).text
+    i = h.find('"api": "/api/exchangerate/list"')
+    if i < 0:
+        raise RuntimeError("embedded KB exchange-rate JSON not found")
+    j = h.find('"items":', i)
+    arr, _ = json.JSONDecoder().raw_decode(h[j + len('"items":'):].lstrip())
+    rates = {}
+    for x in arr:
+        cur = x.get("curencyIso")
+        if not cur:
+            continue
+        rates[cur] = lrow(x.get("currencyUnit") or 1, num(x.get("middleCNB")), num(x.get("nonCashBuy")),
+                          num(x.get("nonCashSell")), num(x.get("cashBuy")), num(x.get("cashSell")))
+    q = re.search(r'"queryDate":\s*"([\d-]{10})', h[i:i + 500])
+    return {"valid_for": q.group(1) if q else None, "middle_source": "published (ČNB middle)", "rates": rates}
+
+
+# --- Hungary: MNB SOAP (plain HTTP endpoint)
+def mnb():
+    url = "http://www.mnb.hu/arfolyamok.asmx"
+    body = ('<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">'
+            '<soap:Body><GetCurrentExchangeRates xmlns="http://www.mnb.hu/webservices/"/></soap:Body></soap:Envelope>')
+    r = SESSION.post(url, data=body.encode(), timeout=TIMEOUT, headers={
+        "Content-Type": "text/xml; charset=utf-8",
+        "SOAPAction": '"http://www.mnb.hu/webservices/MNBArfolyamServiceSoap/GetCurrentExchangeRates"'})
+    r.raise_for_status()
+    inner = re.search(r"<GetCurrentExchangeRatesResult>(.*?)</GetCurrentExchangeRatesResult>", r.text, re.S).group(1)
+    root = ET.fromstring(htmllib.unescape(inner))
+    day = root.find("Day")
+    rates = {x.get("curr"): lrow(int(x.get("unit") or 1), num(x.text, "comma"), compute_mid=False)
+             for x in day.findall("Rate")}
+    return {"valid_for": day.get("date"), "middle_source": "published", "rates": rates}
+
+
+# --- Sweden / Denmark
+def riksbank():
+    d = get("https://api.riksbank.se/swea/v1/Observations/Latest/ByGroup/130").json()
+    latest = max(x["date"] for x in d)
+    rates = {x["seriesId"][3:6]: lrow(1, float(x["value"]), compute_mid=False)
+             for x in d if x["date"] == latest and x.get("value")}
+    return {"valid_for": latest, "middle_source": "published", "rates": rates}
+
+
+def nationalbanken():
+    root = ET.fromstring(get("https://www.nationalbanken.dk/api/currencyratesxml?lang=en").content)
+    day = root.find("dailyrates")
+    rates = {c.get("code"): lrow(100, num(c.get("rate")), compute_mid=False) for c in day.findall("currency")}
+    return {"valid_for": day.get("id"), "middle_source": "published", "rates": rates}
+
+
+# --- Slovenia: NLB (EUR based, foreign per 1 EUR)
+def nlb_si():
+    url = "https://www.nlb.si/services/tecajnica/?type=individuals&format=json"
+    rates, day = {}, None
+    for l in get(url).text.splitlines():
+        p = l.split()
+        if len(p) >= 7 and re.fullmatch(r"[A-Z]{3}", p[5]):
+            day = p[1]
+            buy, sell = num(p[6].lstrip("0") or "0", "comma"), num(p[7].lstrip("0") if len(p) > 7 else None, "comma")
+            rates[p[5]] = hr_row(1, buy, None, sell, None, None, keep_published=False)
+            mid = rates[p[5]]["transfer"]
+            if mid["buy"] and mid["sell"]:
+                rates[p[5]]["middle"] = r8((mid["buy"] + mid["sell"]) / 2)
+    if not rates:
+        raise RuntimeError("no rows")
+    return {"valid_for": f"{day[:4]}-{day[4:6]}-{day[6:]}" if day else None,
+            "middle_source": "computed_avg_transfer", "note": "NLB tečajnica za fizične osebe (devizni)", "rates": rates}
+
+
+# --- Serbia: NBS official list via kurs.resenje.org mirror (nbs.rs refuses non-browser connections)
+def nbs_rs():
+    url = "https://kurs.resenje.org/api/v1/rates/today"
+    d = get(url).json()
+    rates, day = {}, None
+    for x in d["rates"]:
+        day = x.get("date_from") or day
+        rates[x["code"]] = lrow(x.get("parity") or 1, x.get("exchange_middle"), x.get("exchange_buy"),
+                                x.get("exchange_sell"), x.get("cash_buy"), x.get("cash_sell"), compute_mid=False)
+    return {"valid_for": day, "middle_source": "published",
+            "note": "Službena kursna lista NBS (devizni + efektivni), preuzeto preko kurs.resenje.org API-ja", "rates": rates}
+
+
+# --- Bosnia: CBBH
+def cbbh():
+    day = dt.datetime.now(TZ_HR).strftime("%d.%m.%Y")
+    url = f"https://www.cbbh.ba/CurrencyExchange/GetJson?date={day}"
+    d = get(url).json()
+    rates = {x["AlphaCode"]: lrow(int(x.get("Units") or 1), num(x["Middle"]), num(x["Buy"]), num(x["Sell"]),
+                                  compute_mid=False) for x in d["CurrencyExchangeItems"]}
+    return {"valid_for": (d.get("Date") or "")[:10], "list_number": d.get("Number"), "url": url,
+            "middle_source": "published", "rates": rates}
+
+
+# --- North Macedonia: NBRM
+def nbrm():
+    t = dt.datetime.now(TZ_HR).date()
+    url = (f"https://www.nbrm.mk/KLServiceNOV/GetExchangeRates?StartDate={(t - dt.timedelta(days=4)).strftime('%d.%m.%Y')}"
+           f"&EndDate={t.strftime('%d.%m.%Y')}&format=json")
+    d = get(url).json()
+    latest = max(x["datum"] for x in d)
+    rates = {x["oznaka"]: lrow(x.get("nomin") or 1, x.get("sreden"), x.get("kupoven"), x.get("prodazen"), compute_mid=False)
+             for x in d if x["datum"] == latest}
+    return {"valid_for": latest[:10], "url": url, "middle_source": "published", "rates": rates}
+
+
+# --- Albania: Bank of Albania
+def boa():
+    url = "https://www.bankofalbania.org/Tregjet/Kursi_zyrtar_i_kembimit/"
+    h = get(url).text
+    rates = {}
+    for c in _rows(h):
+        if len(c) >= 3 and re.fullmatch(r"[A-Z]{3}", c[1] or "") and c[1] not in rates:
+            m = re.search(r"\((\d+)\)", c[0])
+            rates[c[1]] = lrow(int(m.group(1)) if m else 1, num(c[2]), compute_mid=False)
+    if not rates:  # layout uses divs/tds without tr
+        for m in re.finditer(r"<td[^>]*>\s*([^<]*?)\s*</td>\s*<td[^>]*>\s*([A-Z]{3})\s*</td>\s*<td[^>]*>\s*([\d.,]+)\s*</td>", h):
+            u = re.search(r"\((\d+)\)", m.group(1))
+            rates[m.group(2)] = lrow(int(u.group(1)) if u else 1, num(m.group(3)), compute_mid=False)
+    d = re.search(r"(\d{2}\.\d{2}\.\d{4})", h[h.find("Përditesimi"):] if "Përditesimi" in h else "")
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"valid_for": dt.datetime.strptime(d.group(1), "%d.%m.%Y").date().isoformat() if d else None,
+            "middle_source": "published", "rates": rates}
+
+
+# --- Indonesia: Bank Indonesia (kurs transaksi + JISDOR), BCA, Mandiri
+def bank_indonesia():
+    url = "https://www.bi.go.id/id/statistik/informasi-kurs/transaksi-bi/default.aspx"
+    h = get(url).text
+    rates = {}
+    for c in _rows(h):
+        if len(c) >= 4 and re.fullmatch(r"[A-Z]{3}", c[0]) and num(c[2], "comma"):
+            # Kurs Jual = BI sells foreign, Kurs Beli = BI buys foreign
+            rates[c[0]] = lrow(int(num(c[1], "comma") or 1), None, num(c[3], "comma"), num(c[2], "comma"))
+    out = {"middle_source": "computed_avg_transfer (USD: JISDOR)", "url": url, "rates": rates}
+    try:
+        jh = get("https://www.bi.go.id/id/statistik/informasi-kurs/jisdor/default.aspx").text
+        for c in _rows(jh):
+            if len(c) >= 2 and re.match(r"\d{1,2} \w+ \d{4}", c[0]):
+                j = num(c[1].replace("Rp", ""), "comma")
+                if j and "USD" in rates:
+                    rates["USD"]["middle"] = r8(j)
+                    rates["USD"]["jisdor"] = r8(j)
+                    out["jisdor_date"] = c[0]
+                break
+    except Exception as e:
+        out["jisdor_error"] = str(e)[:150]
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return out
+
+
+def bca():
+    url = "https://www.bca.co.id/id/informasi/kurs"
+    h = get(url).text
+    i = h.find("m-table-kurs")
+    t = h[i:h.find("</table>", i)]
+    rates = {}
+    for c in _rows(t):
+        if len(c) >= 7 and re.fullmatch(r"[A-Z]{3}", c[0]):
+            v = [num(x, "comma") for x in c[1:7]]
+            # e-Rate (digital) buy/sell, TT Counter buy/sell, Bank Notes buy/sell
+            rates[c[0]] = lrow(1, None, v[2], v[3], v[4], v[5])
+            rates[c[0]]["e_rate"] = {"buy": r8(v[0]), "sell": r8(v[1])}
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"middle_source": "computed_avg_transfer", "note": "transfer = TT Counter, cash = Bank Notes, e_rate = digitalni kanali",
+            "rates": rates}
+
+
+def mandiri():
+    url = "https://www.bankmandiri.co.id/kurs"
+    h = get(url).text
+    rates = {}
+    for c in _rows(h):
+        if len(c) >= 7 and re.fullmatch(r"[A-Z]{3}", c[0]):
+            v = [num(x, "comma") for x in c[1:7]]
+            rates[c[0]] = lrow(1, None, v[2], v[3], v[4], v[5])
+            rates[c[0]]["special_rate"] = {"buy": r8(v[0]), "sell": r8(v[1])}
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"middle_source": "computed_avg_transfer", "note": "transfer = TT Counter, cash = Bank Notes",
+            "rates": rates}
+
+
+# --- Malaysia: BNM
+def bnm():
+    d = get("https://api.bnm.gov.my/public/exchange-rate", headers={"Accept": "application/vnd.BNM.API.v1+json"}).json()
+    rates, day = {}, None
+    for x in d["data"]:
+        r = x["rate"]
+        day = r.get("date") or day
+        rates[x["currency_code"]] = lrow(x.get("unit") or 1, r.get("middle_rate"), r.get("buying_rate"),
+                                         r.get("selling_rate"), compute_mid=False)
+    return {"valid_for": day, "middle_source": "published", "note": "BNM interbank 12:00 rates", "rates": rates}
+
+
+# --- Cambodia: NBC, ABA, ACLEDA
+def nbc():
+    url = "https://www.nbc.gov.kh/english/economic_research/exchange_rate.php"
+    h = get(url).text
+    rates = {}
+    m = re.search(r"Official Exchange Rate\s*:\s*(?:<[^>]+>\s*)*([\d,.]+)", h)
+    if m:
+        rates["USD"] = lrow(1, num(m.group(1)), compute_mid=False)
+    for c in _rows(h):
+        if len(c) >= 6 and re.fullmatch(r"[A-Z]{3}/KHR", c[1]):
+            rates[c[1][:3]] = lrow(int(num(c[2]) or 1), num(c[5]), num(c[3]), num(c[4]), compute_mid=False)
+    d = re.search(r"Exchange Rate on\s*:\s*(?:<[^>]+>\s*)*(\d{4}-\d{2}-\d{2})", h)
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"valid_for": d.group(1) if d else None, "middle_source": "published", "rates": rates}
+
+
+def aba():
+    url = "https://www.ababank.com/en/forex-exchange/"
+    h = get(url).text
+    tabs = re.findall(r"<table.*?</table>", h, re.S)
+    if len(tabs) < 2:
+        raise RuntimeError("expected 2 tables (SWIFT transfer, notes)")
+    tr = {c[0][:3]: c for c in _rows(tabs[0]) if len(c) >= 3 and re.match(r"[A-Z]{3} / KHR", c[0])}
+    ca = {c[0][:3]: c for c in _rows(tabs[1]) if len(c) >= 3 and re.match(r"[A-Z]{3} / KHR", c[0])}
+    rates = {}
+    for cur in sorted(set(tr) | set(ca)):
+        t, c = tr.get(cur, [None] * 3), ca.get(cur, [None] * 3)
+        rates[cur] = lrow(1, None, num(t[1]), num(t[2]), num(c[1]), num(c[2]))
+    return {"middle_source": "computed_avg_transfer", "rates": rates}
+
+
+def acleda():
+    url = "https://www.acledabank.com.kh/kh/eng/ps_cmforeignexchange"
+    h = get(url).text
+    rates = {}
+    for m in re.finditer(r"exchange-flag/([A-Z]{3})\.png'\s*/>\s*[A-Z]{3}</td><td>([\d,.]+).*?</td><td>([\d,.]+)", h):
+        if m.group(1) not in rates:
+            rates[m.group(1)] = lrow(1, None, None, None, num(m.group(2)), num(m.group(3)))
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"middle_source": "computed_avg_cash", "note": "ACLEDA exchange counter (gotovina), KHR", "rates": rates}
+
+
+# --- Laos: BCEL
+def bcel():
+    url = "https://www.bcel.com.la/bcel/exchange-rate.html"
+    h = get(url).text
+    rates = {}
+    for c in _rows(h):
+        if len(c) >= 7:
+            m = re.match(r"([A-Z]{3})(?:\s+([\d-]+))?$", c[2])
+            if not m:
+                continue
+            cur, den = m.group(1), m.group(2)
+            if cur in rates and den and den.startswith("1-"):
+                continue
+            # buy: NOTE, BILL, EFT ; sell
+            note, bill, eft, sell = [num(x) for x in c[3:7]]
+            rates[cur] = lrow(1, None, eft, sell, note, sell)
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"middle_source": "computed_avg_transfer", "note": "cash = NOTE, transfer = EFT; USD/EUR: krupni apoeni", "rates": rates}
+
+
+# --- Japan: MUFG (weekday TTM board)
+def mufg():
+    url = "https://www.bk.mufg.jp/ippan/kinri/list_j/kinri/kawase.html"
+    r = get(url)
+    r.encoding = r.apparent_encoding or "utf-8"
+    rates = {}
+    for c in _rows(r.text):
+        if len(c) >= 9 and re.match(r"[A-Z]{3}", c[1]):
+            cur = c[1][:3]
+            tts, cash_s, ttb, cash_b = num(c[2]), num(c[4]), num(c[5]), num(c[8])
+            if tts or ttb:
+                rates[cur] = lrow(100 if cur in ("KRW", "IDR") else 1, None, ttb, tts, cash_b, cash_s)
+    if not rates:
+        raise RuntimeError("MUFG board empty (published only on Japanese business days)")
+    return {"middle_source": "computed_avg_transfer (TTM)", "rates": rates}
+
+
+# --- China: CFETS central parity, Bank of China
+def cfets():
+    url = "https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/ccpr.json"
+    d = get(url).json()
+    rates = {}
+    for x in d.get("records", []):
+        pair = x.get("vrtEName", "")
+        p = num(x.get("price"))
+        if not p:
+            continue
+        m = re.match(r"(100)?([A-Z]{3})/CNY$", pair)
+        if m:
+            rates[m.group(2)] = lrow(100 if m.group(1) else 1, p, compute_mid=False)
+            continue
+        m = re.match(r"CNY/([A-Z]{3})$", pair)
+        if m:
+            rates[m.group(1)] = lrow(1, 1 / p, compute_mid=False)
+    return {"valid_for": (d.get("data") or {}).get("lastDate"), "middle_source": "published (central parity)", "rates": rates}
+
+
+def boc_cn():
+    url = "https://www.boc.cn/sourcedb/whpj/enindex_1619.html"
+    r = get(url)
+    r.encoding = "utf-8"
+    rates, pub = {}, None
+    for c in _rows(r.text):
+        if len(c) >= 7 and re.fullmatch(r"[A-Z]{3}", c[0]):
+            v = [num(x) for x in c[1:6]]
+            rates[c[0]] = lrow(100, v[4], v[0], v[2], v[1], v[3])
+            pub = pub or c[6]
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"published_at": pub, "middle_source": "published", "rates": rates}
+
+
+# --- Sri Lanka: Bank of Ceylon
+def boc_lk():
+    url = "https://www.boc.lk/rates-tariff"
+    h = get(url).text
+    i = h.find("Telegraphic")
+    t = h[h.rfind("<table", 0, i): h.find("</table>", i)]
+    rates = {}
+    for c in _rows(t):
+        if len(c) >= 7 and re.fullmatch(r"[A-Z]{3}", c[0]):
+            v = [num(x) for x in c[1:7]]
+            rates[c[0]] = lrow(1, None, v[4], v[5], v[0], v[1])
+    m = re.search(r"as at:\s*([\d.]+ [\d:]+ [AP]M)", t)
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"published_at": m.group(1) if m else None, "middle_source": "computed_avg_transfer",
+            "note": "cash = Currency notes, transfer = Telegraphic transfers", "rates": rates}
+
+
+# --- Turkey: TCMB, İşbank
+def tcmb():
+    url = "https://www.tcmb.gov.tr/kurlar/today.xml"
+    root = ET.fromstring(get(url).content)
+    rates = {}
+    for c in root.findall("Currency"):
+        cur = c.get("CurrencyCode")
+        f = lambda k: num(c.findtext(k))
+        u = int(c.findtext("Unit") or 1)
+        if f("ForexBuying"):
+            rates[cur] = lrow(u, None, f("ForexBuying"), f("ForexSelling"), f("BanknoteBuying"), f("BanknoteSelling"))
+    d = root.get("Date")
+    return {"valid_for": dt.datetime.strptime(d, "%m/%d/%Y").date().isoformat() if d else None,
+            "list_number": root.get("Bulten_No"), "middle_source": "computed_avg_transfer (forex)", "rates": rates}
+
+
+def isbank():
+    url = "https://www.isbank.com.tr/en/foreign-exchange-rates"
+    h = get(url).text
+    t = re.findall(r"<table.*?</table>", h, re.S)
+    rates = {}
+    for c in _rows(t[0] if t else ""):
+        if len(c) >= 3 and re.match(r"[A-Z]{3}\b", c[0]):
+            rates[c[0][:3]] = lrow(1, None, num(c[1], "comma"), num(c[2], "comma"))
+    if not rates:
+        raise RuntimeError("no rates parsed")
+    return {"middle_source": "computed_avg_transfer", "note": "İşbank FX board (live, changes during the day)", "rates": rates}
+
+
+TOURIST_SET = ["USD", "EUR", "GBP", "CHF", "JPY", "CNY", "AUD", "CAD", "NZD", "SGD", "HKD", "KRW", "THB", "IDR",
+               "MYR", "PHP", "VND", "INR", "AED", "TRY", "PLN", "CZK", "HUF", "RON", "SEK", "NOK", "DKK", "RSD",
+               "BAM", "MKD", "ALL", "KHR", "LAK", "LKR", "TWD", "SAR", "ILS", "BRL", "MXN", "ZAR", "EGP", "QAR"]
+
+
+def global_as_central(local):
+    """Fallback 'central' entry derived from open.er-api.com mid rates (for countries without a usable central bank feed)."""
+    def fn():
+        d = open_er_cached()
+        r = d["rates_per_eur"]
+        if local not in r:
+            raise RuntimeError(f"{local} not in global reference")
+        rates = {c: mk_row(1, r8(r[local] / r[c])) for c in TOURIST_SET if c in r and c != local}
+        return {"valid_for": d["valid_for"], "middle_source": "global_reference (open.er-api.com mid)",
+                "note": "Nema javno dohvatljivog tečaja središnje banke; prikazan je globalni referentni (mid) tečaj.",
+                "rates": rates}
+    return fn
+
+
+_OER_CACHE = {}
+
+
+def open_er_cached():
+    with _LOCK:
+        if "d" not in _OER_CACHE:
+            _OER_CACHE["d"] = open_er()
+        return _OER_CACHE["d"]
+
+
 # ======================================================= registry
 COUNTRIES = {
     "HR": {
@@ -511,9 +976,114 @@ COUNTRIES = {
 }
 
 
-def run_source(s):
+ECB_PAGE = "https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html"
+ECB_XML = "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"
+
+
+def ecb_src(note=None):
+    return source("ecb", "European Central Bank (ECB) – euro reference rates", "central_bank", ECB_XML, ECB_PAGE,
+                  ecb_as_central(note))
+
+
+def fallback_src(local, why):
+    s = source("global_reference", "Globalni referentni tečaj (open.er-api.com)", "reference",
+               "https://open.er-api.com/v6/latest/EUR", "https://www.exchangerate-api.com", global_as_central(local))
+    s["why"] = why
+    return s
+
+
+EURO_NOTE_UNILATERAL = "Zemlja koristi euro (bez članstva u eurozoni) – referentni tečaj ECB-a."
+WORLD = {
+    # ---- eurozone (central = ECB)
+    "DE": ("Njemačka", "Germany", "EUR", ecb_src(), []),
+    "FR": ("Francuska", "France", "EUR", ecb_src(), []),
+    "IT": ("Italija", "Italy", "EUR", ecb_src(), []),
+    "ES": ("Španjolska", "Spain", "EUR", ecb_src(), []),
+    "AT": ("Austrija", "Austria", "EUR", ecb_src(), []),
+    "NL": ("Nizozemska", "Netherlands", "EUR", ecb_src(), []),
+    "SI": ("Slovenija", "Slovenia", "EUR", ecb_src(), [
+        source("nlb", "NLB", "bank", "https://www.nlb.si/services/tecajnica/?type=individuals&format=json",
+               "https://www.nlb.si/tecajnica", nlb_si)]),
+    "BG": ("Bugarska", "Bulgaria", "EUR", ecb_src("Bugarska koristi euro od 1.1.2026."), []),
+    "ME": ("Crna Gora", "Montenegro", "EUR", ecb_src(EURO_NOTE_UNILATERAL), []),
+    "XK": ("Kosovo", "Kosovo", "EUR", ecb_src(EURO_NOTE_UNILATERAL), []),
+    # ---- EU non-euro
+    "PL": ("Poljska", "Poland", "PLN", source("nbp", "Narodowy Bank Polski (NBP)", "central_bank",
+            "https://api.nbp.pl/api/exchangerates/tables/{A,C}/?format=json", "https://nbp.pl/en/statistic-and-financial-reporting/rates/", nbp), []),
+    "CZ": ("Češka", "Czechia", "CZK", source("cnb", "Česká národní banka (ČNB)", "central_bank",
+            "https://www.cnb.cz/cs/financni-trhy/devizovy-trh/kurzy-devizoveho-trhu/kurzy-devizoveho-trhu/denni_kurz.txt",
+            "https://www.cnb.cz/en/financial-markets/foreign-exchange-market/central-bank-exchange-rate-fixing/", cnb), [
+        source("kb", "Komerční banka", "bank", "https://www.kb.cz/cs/kurzovni-listek (embedded JSON)",
+               "https://www.kb.cz/cs/kurzovni-listek", kb_cz)]),
+    "HU": ("Mađarska", "Hungary", "HUF", source("mnb", "Magyar Nemzeti Bank (MNB)", "central_bank",
+            "http://www.mnb.hu/arfolyamok.asmx (SOAP GetCurrentExchangeRates)", "https://www.mnb.hu/en/arfolyamok", mnb), []),
+    "RO": ("Rumunjska", "Romania", "RON", fallback_src("RON", "BNR XML (curs.bnr.ro) je zabranjen u robots.txt"), []),
+    "SE": ("Švedska", "Sweden", "SEK", source("riksbank", "Sveriges Riksbank", "central_bank",
+            "https://api.riksbank.se/swea/v1/Observations/Latest/ByGroup/130", "https://www.riksbank.se/en-gb/statistics/interest-rates-and-exchange-rates/", riksbank), []),
+    "DK": ("Danska", "Denmark", "DKK", source("nationalbanken", "Danmarks Nationalbank", "central_bank",
+            "https://www.nationalbanken.dk/api/currencyratesxml?lang=en", "https://www.nationalbanken.dk/en/what-we-do/stable-prices-monetary-policy-and-the-danish-economy/exchange-rates", nationalbanken), []),
+    # ---- Balkan
+    "RS": ("Srbija", "Serbia", "RSD", source("nbs", "Narodna banka Srbije (NBS)", "central_bank",
+            "https://kurs.resenje.org/api/v1/rates/today", "https://www.nbs.rs/sr_RS/finansijsko_trziste/medjubankarsko-devizno-trziste/kursna-lista/", nbs_rs), []),
+    "BA": ("Bosna i Hercegovina", "Bosnia and Herzegovina", "BAM", source("cbbh", "Centralna banka BiH (CBBH)", "central_bank",
+            "https://www.cbbh.ba/CurrencyExchange/GetJson?date=<dd.mm.yyyy>", "https://www.cbbh.ba/CurrencyExchange/", cbbh), []),
+    "MK": ("Sjeverna Makedonija", "North Macedonia", "MKD", source("nbrm", "Narodna banka RSM (NBRM)", "central_bank",
+            "https://www.nbrm.mk/KLServiceNOV/GetExchangeRates?format=json", "https://www.nbrm.mk/kursna_lista.nspx", nbrm), []),
+    "AL": ("Albanija", "Albania", "ALL", source("boa", "Banka e Shqipërisë", "central_bank",
+            "https://www.bankofalbania.org/Tregjet/Kursi_zyrtar_i_kembimit/", "https://www.bankofalbania.org/Tregjet/Kursi_zyrtar_i_kembimit/", boa), []),
+    # ---- Asia & Middle East
+    "ID": ("Indonezija", "Indonesia", "IDR", source("bi", "Bank Indonesia (kurs transaksi + JISDOR)", "central_bank",
+            "https://www.bi.go.id/id/statistik/informasi-kurs/transaksi-bi/default.aspx", "https://www.bi.go.id/id/statistik/informasi-kurs/jisdor/default.aspx", bank_indonesia), [
+        source("bca", "Bank Central Asia (BCA)", "bank", "https://www.bca.co.id/id/informasi/kurs", "https://www.bca.co.id/id/informasi/kurs", bca),
+        source("mandiri", "Bank Mandiri", "bank", "https://www.bankmandiri.co.id/kurs", "https://www.bankmandiri.co.id/kurs", mandiri)]),
+    "TH": ("Tajland", "Thailand", "THB", fallback_src("THB", "BOT API traži ključ; stranica BOT-a puni podatke JS-om"), []),
+    "MY": ("Malezija", "Malaysia", "MYR", source("bnm", "Bank Negara Malaysia (BNM)", "central_bank",
+            "https://api.bnm.gov.my/public/exchange-rate", "https://www.bnm.gov.my/exchange-rates", bnm), []),
+    "SG": ("Singapur", "Singapore", "SGD", fallback_src("SGD", "MAS API nedostupan (maintenance stranica)"), []),
+    "PH": ("Filipini", "Philippines", "PHP", fallback_src("PHP", "BSP stranica zabranjena u robots.txt"), []),
+    "KH": ("Kambodža", "Cambodia", "KHR", source("nbc", "National Bank of Cambodia (NBC)", "central_bank",
+            "https://www.nbc.gov.kh/english/economic_research/exchange_rate.php", "https://www.nbc.gov.kh/english/economic_research/exchange_rate.php", nbc), [
+        source("aba", "ABA Bank", "bank", "https://www.ababank.com/en/forex-exchange/", "https://www.ababank.com/en/forex-exchange/", aba),
+        source("acleda", "ACLEDA Bank", "bank", "https://www.acledabank.com.kh/kh/eng/ps_cmforeignexchange", "https://www.acledabank.com.kh/kh/eng/ps_cmforeignexchange", acleda)]),
+    "LA": ("Laos", "Laos", "LAK", fallback_src("LAK", "bol.gov.la: TLS greška"), [
+        source("bcel", "BCEL (Banque pour le Commerce Extérieur Lao)", "bank", "https://www.bcel.com.la/bcel/exchange-rate.html",
+               "https://www.bcel.com.la/bcel/exchange-rate.html", bcel)]),
+    "JP": ("Japan", "Japan", "JPY", fallback_src("JPY", "Bank of Japan ne objavljuje dnevnu referentnu listu"), [
+        source("mufg", "MUFG Bank", "bank", "https://www.bk.mufg.jp/ippan/kinri/list_j/kinri/kawase.html",
+               "https://www.bk.mufg.jp/ippan/kinri/list_j/kinri/kawase.html", mufg)]),
+    "KR": ("Južna Koreja", "South Korea", "KRW", fallback_src("KRW", "BOK/Korea Exim API traže ključ; banke pune podatke JS-om"), []),
+    "CN": ("Kina", "China", "CNY", source("cfets", "PBOC/CFETS central parity", "central_bank",
+            "https://www.chinamoney.com.cn/r/cms/www/chinamoney/data/fx/ccpr.json", "https://www.chinamoney.com.cn/english/bmkcpr/", cfets), [
+        source("boc", "Bank of China", "bank", "https://www.boc.cn/sourcedb/whpj/enindex_1619.html", "https://www.boc.cn/sourcedb/whpj/enindex_1619.html", boc_cn)]),
+    "IN": ("Indija", "India", "INR", fallback_src("INR", "RBI/FBIL nemaju jednostavan javni feed"), []),
+    "LK": ("Šri Lanka", "Sri Lanka", "LKR", fallback_src("LKR", "CBSL stranica puni podatke JS-om"), [
+        source("boc_lk", "Bank of Ceylon", "bank", "https://www.boc.lk/rates-tariff", "https://www.boc.lk/rates-tariff", boc_lk)]),
+    "TR": ("Turska", "Turkey", "TRY", source("tcmb", "Türkiye Cumhuriyet Merkez Bankası (TCMB)", "central_bank",
+            "https://www.tcmb.gov.tr/kurlar/today.xml", "https://www.tcmb.gov.tr/wps/wcm/connect/EN/TCMB+EN/Main+Menu/Statistics/Exchange+Rates/", tcmb), [
+        source("isbank", "Türkiye İş Bankası", "bank", "https://www.isbank.com.tr/en/foreign-exchange-rates", "https://www.isbank.com.tr/en/foreign-exchange-rates", isbank)]),
+    "AE": ("UAE", "United Arab Emirates", "AED", fallback_src("AED", "CBUAE vraća 403"), []),
+}
+for _cc, (_n, _ne, _cur, _cb, _banks) in WORLD.items():
+    COUNTRIES[_cc] = {"name": _n, "name_en": _ne, "local_currency": _cur, "central_bank": _cb, "banks": _banks}
+
+
+def load_config(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def run_source(s, cc=None, config=None):
     out = {k: s[k] for k in ("id", "name", "kind", "url", "page_url")}
+    if s.get("why"):
+        out["why"] = s["why"]
     out["fetched_at"] = now_utc()
+    dis = ((config or {}).get("disabled") or {}).get(f"{cc}/{s['id']}")
+    if dis:
+        out.update(status="skipped", error=f"disabled in sources_config.json: {dis}", rates={})
+        return out
     if not s["enabled"]:
         out.update(status="skipped", error=s["disabled_reason"], rates={})
         return out
@@ -523,8 +1093,11 @@ def run_source(s):
         out.update(res)
         out["status"] = "ok"
         out["count"] = len(res.get("rates") or res.get("rates_per_eur") or {})
+        if not out["count"]:
+            raise RuntimeError("source returned 0 rates")
     except Exception as e:
         out.update(status="error", error=f"{type(e).__name__}: {str(e)[:300]}", rates={})
+        out.pop("count", None)
         if os.environ.get("FX_DEBUG"):
             traceback.print_exc()
     out["elapsed_ms"] = int((time.time() - t0) * 1000)
@@ -577,7 +1150,7 @@ def sanity(doc):
                 if cb and cs and cb > cs:
                     warns.append(f"{cc}/{s['id']}/{cur}: cash buy {cb} > sell {cs}")
     # specific: EUR/VND must be ~ 24k-35k
-    for s in doc["countries"]["VN"]["banks"]:
+    for s in (doc["countries"].get("VN") or {}).get("banks", []):
         e = (s.get("rates") or {}).get("EUR")
         if s.get("status") in ("ok", "stale") and e and e.get("middle") and not (24000 < e["middle"] < 35000):
             warns.append(f"VN/{s['id']}: EUR middle {e['middle']} out of expected 24k-35k")
@@ -614,42 +1187,65 @@ def index_prev(prev):
 
 
 def main():
+    here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
-    ap.add_argument("-o", "--out", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "rates.json"))
-    ap.add_argument("--countries-file", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "country_currency.json"))
+    ap.add_argument("-o", "--out", default=os.path.join(here, "rates.json"))
+    ap.add_argument("--countries-file", default=os.path.join(here, "country_currency.json"))
+    ap.add_argument("--config", default=os.path.join(here, "sources_config.json"))
+    ap.add_argument("--split-dir", default=None, help="dir for per-country files (default: <out dir>/rates)")
+    ap.add_argument("--only", default=None, help="comma list of country codes (testing)")
     ap.add_argument("--no-published", action="store_true", help="drop original HR 'published' numbers (smaller JSON)")
     ap.add_argument("--pretty", action="store_true")
     a = ap.parse_args()
+    config = load_config(a.config)
+    only = set(a.only.upper().split(",")) if a.only else None
 
     started = now_utc()
-    doc = {"schema_version": 1, "generated_at": started,
+    doc = {"schema_version": 1, "generated_at": started, "checked_at": started,
            "convention": ("countries.*: value = local currency per 1 unit of foreign currency; buy = bank buys "
                           "foreign from you, sell = bank sells foreign to you; transfer = devize/chuyển khoản, "
                           "cash = efektiva/tiền mặt. global_reference: units of currency per 1 EUR (mid)."),
            "countries": {}, "global_reference": {}}
 
-    for cc, c in COUNTRIES.items():
-        cb = run_source(c["central_bank"])
-        banks = [run_source(b) for b in c["banks"]]
-        if a.no_published:
-            for s in [cb] + banks:
-                for row in (s.get("rates") or {}).values():
-                    row.pop("published", None)
-        doc["countries"][cc] = {"name": c["name"], "name_en": c["name_en"], "local_currency": c["local_currency"],
-                                "central_bank": cb, "banks": banks}
-
+    # global references first (cached; also feed ECB-based and fallback country entries)
     gref = {}
     for key, fn, name, url in [
-        ("ecb", ecb, "European Central Bank – euro foreign exchange reference rates", "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml"),
-        ("open_er_api", open_er, "ExchangeRate-API open access (open.er-api.com)", "https://open.er-api.com/v6/latest/EUR"),
+        ("ecb", ecb_cached, "European Central Bank – euro foreign exchange reference rates", ECB_XML),
+        ("open_er_api", open_er_cached, "ExchangeRate-API open access (open.er-api.com)", "https://open.er-api.com/v6/latest/EUR"),
     ]:
-        gref[key] = run_source(source(key, name, "reference", url, url, fn))
+        gref[key] = run_source(source(key, name, "reference", url, url, fn), "global", config)
     iso = set((gref["open_er_api"].get("rates_per_eur") or {}).keys()) | set((gref["ecb"].get("rates_per_eur") or {}).keys())
     gref["fawazahmed0"] = run_source(source("fawazahmed0", "fawazahmed0 currency-api (jsDelivr)", "reference",
                                             "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json",
-                                            "https://github.com/fawazahmed0/exchange-api", lambda: fawaz(iso)))
+                                            "https://github.com/fawazahmed0/exchange-api", lambda: fawaz(iso)), "global", config)
     for g in gref.values():
         g.pop("rates", None) if g.get("status") == "ok" else None
+
+    # all country sources in parallel (different hosts; each adapter isolated)
+    jobs = []
+    for cc, c in COUNTRIES.items():
+        if only and cc not in only:
+            continue
+        jobs.append((cc, "central", c["central_bank"]))
+        jobs += [(cc, "bank", b) for b in c["banks"]]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=int(os.environ.get("FX_WORKERS", "8"))) as ex:
+        results = list(ex.map(lambda j: run_source(j[2], j[0], config), jobs))
+    for (cc, role, _), res in zip(jobs, results):
+        c = COUNTRIES[cc]
+        e = doc["countries"].setdefault(cc, {"name": c["name"], "name_en": c["name_en"],
+                                             "local_currency": c["local_currency"], "central_bank": None, "banks": []})
+        # drop legacy / non-ISO codes and the local currency itself
+        if iso and res.get("rates"):
+            res["rates"] = {k: v for k, v in res["rates"].items() if k in iso and k != c["local_currency"]}
+            res["count"] = len(res["rates"])
+        if a.no_published:
+            for row in (res.get("rates") or {}).values():
+                row.pop("published", None)
+        if role == "central":
+            e["central_bank"] = res
+        else:
+            e["banks"].append(res)
     doc["global_reference"] = gref
     cc_map = load_country_currency(a.countries_file)
     if cc_map:
@@ -679,12 +1275,26 @@ def main():
     doc["summary"]["global"] = {k: v["status"] for k, v in gref.items()}
     doc["finished_at"] = now_utc()
 
-    tmp = a.out + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(doc, f, ensure_ascii=False, indent=2 if a.pretty else None, separators=None if a.pretty else (",", ":"))
-    os.replace(tmp, a.out)
+    dump = lambda obj, path: (json.dump(obj, open(path + ".tmp", "w", encoding="utf-8"), ensure_ascii=False,
+                                        indent=2 if a.pretty else None, separators=None if a.pretty else (",", ":")),
+                              os.replace(path + ".tmp", path))
+    dump(doc, a.out)
 
-    print(json.dumps(doc["summary"], ensure_ascii=False, indent=1))
+    # per-country files + index (rates/<ISO2>.json, rates/index.json)
+    split = a.split_dir or os.path.join(os.path.dirname(os.path.abspath(a.out)), "rates")
+    os.makedirs(split, exist_ok=True)
+    index = {"schema_version": 1, "generated_at": doc["generated_at"], "checked_at": doc["checked_at"],
+             "convention": doc["convention"], "global_reference_file": "global.json", "countries": {}}
+    for cc, c in doc["countries"].items():
+        dump({"generated_at": doc["generated_at"], "checked_at": doc["checked_at"], "convention": doc["convention"],
+              "country": cc, **c}, os.path.join(split, f"{cc}.json"))
+        index["countries"][cc] = {"name": c["name"], "name_en": c["name_en"], "local_currency": c["local_currency"],
+                                  "file": f"{cc}.json", "sources": doc["summary"][cc]}
+    dump({"generated_at": doc["generated_at"], "global_reference": gref, "country_currency": cc_map},
+         os.path.join(split, "global.json"))
+    dump(index, os.path.join(split, "index.json"))
+
+    print(json.dumps(doc["summary"], ensure_ascii=False))
     for cc, c in doc["countries"].items():
         for s in [c["central_bank"]] + c["banks"]:
             if s["status"] != "ok":
@@ -692,8 +1302,8 @@ def main():
                       + (f" (data from {s.get('fetched_at')})" if s["status"] == "stale" else ""))
     if doc["sanity_warnings"]:
         print("SANITY WARNINGS:", *doc["sanity_warnings"], sep="\n  ")
-    print(f"wrote {a.out} ({os.path.getsize(a.out)} bytes)")
-    ok_any = any(s["status"] in ("ok", "stale") for c in doc["countries"].values() for s in c["banks"])
+    print(f"wrote {a.out} ({os.path.getsize(a.out)} bytes) + {split}/ ({len(doc['countries'])} countries)")
+    ok_any = any(s["status"] in ("ok", "stale") for c in doc["countries"].values() for s in [c["central_bank"]] + c["banks"])
     return 0 if ok_any else 1
 
 

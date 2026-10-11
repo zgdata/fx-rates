@@ -1,8 +1,11 @@
 # fx-rates – dnevni dohvat tečajeva za travel converter (PWA)
 
 **Podaci (osvježava se automatski svaki dan u 05:17 UTC):**
-- GitHub Pages: `https://zgdata.github.io/fx-rates/rates.json`
-- jsDelivr CDN: `https://cdn.jsdelivr.net/gh/zgdata/fx-rates@main/rates.json` (CDN cache do ~12 h)
+- Sve u jednoj datoteci: `https://zgdata.github.io/fx-rates/rates.json`
+- Po državi: `https://zgdata.github.io/fx-rates/rates/<ISO2>.json` (npr. `rates/ID.json`), popis: `rates/index.json`,
+  globalni referentni tečajevi + mapa država→valuta: `rates/global.json`
+- jsDelivr CDN (backup): `https://cdn.jsdelivr.net/gh/zgdata/fx-rates@main/rates.json` (CDN cache do ~12 h, browser do 7 dana – koristi Pages kao primarni)
+- `checked_at` / `generated_at` = vrijeme zadnje provjere (svaki dan, i kad se tečajevi nisu promijenili).
 
 > **Atribucija / napomena (obavezno prikazati u appu):**
 > - Globalni referentni tečajevi iz open.er-api.com: **"Rates By Exchange Rate API"** (https://www.exchangerate-api.com).
@@ -30,7 +33,19 @@ Opt-in prekidači (po defaultu ISKLJUČENI, vidi "Pravila"):
 - `FX_ENABLE_ERSTE=1` – Erste (API host `local.erstebank.hr` ima robots.txt `Disallow: /`)
 - `FX_OTP_BROWSER_UA=1` – OTP (WAF vraća 403 za svaki ne-browser User-Agent)
 
-## Izvori
+## Države (36)
+HR, VN (banke), eurozona DE FR IT ES AT NL SI BG ME XK (ECB; SI + NLB), PL (NBP), CZ (ČNB + KB),
+HU (MNB), RO (globalni fallback), SE (Riksbank), DK (Nationalbanken), RS (NBS), BA (CBBH), MK (NBRM),
+AL (BoA), ID (Bank Indonesia + BCA + Mandiri), MY (BNM), KH (NBC + ABA + ACLEDA), LA (BCEL), JP (MUFG),
+CN (CFETS + Bank of China), LK (Bank of Ceylon), TR (TCMB + İşbank), te TH, SG, PH, KR, IN, AE (globalni fallback).
+Gdje nema središnje banke, `central_bank` je `{"id":"global_reference","kind":"reference"}` izveden iz open.er-api.com
+(mid, ~40 turističkih valuta), s poljem `why`.
+
+## Isključivanje izvora (`sources_config.json`)
+`{"disabled": {"VN/vietinbank": "razlog"}}` – izvor dobije `status:"skipped"` (bez stale podataka).
+Koristi se za izvore koji ne rade s GitHub Actions runnera.
+
+## Izvori (HR + VN; ostale države: `url` / `page_url` u JSON-u)
 | Država | Izvor | Endpoint | Format |
 |---|---|---|---|
 | HR | HNB (središnja) | `api.hnb.hr/tecajn-eur/v3` | službeni JSON API |

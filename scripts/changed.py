@@ -2,7 +2,7 @@
 """Exit 0 if rates.json content changed vs. git HEAD (ignoring timestamps/timings), else 1."""
 import json, subprocess, sys
 
-VOLATILE = {"generated_at", "finished_at", "fetched_at", "elapsed_ms", "last_attempt_at"}
+VOLATILE = {"generated_at", "checked_at", "finished_at", "fetched_at", "elapsed_ms", "last_attempt_at"}
 
 
 def strip(o):
