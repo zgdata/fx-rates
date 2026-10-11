@@ -1304,7 +1304,7 @@ def merge_box_sources(doc, path, config, max_age_h):
         e = box.get(key)
         if not e or not e.get("rates"):
             continue                                   # stays 'skipped'
-        e = dict(e, fetched_via="box")
+        e = {"fetched_via": "box", **e}
         try:
             age_h = (now - dt.datetime.fromisoformat(e["fetched_at"])).total_seconds() / 3600
         except Exception:

@@ -165,4 +165,8 @@ VietinBank (VN), ABA (KH) i Bank of Ceylon (LK) vraćaju 403/405 GitHub runnerim
 s poljem `fetched_via:"box"`; ako su stariji od 36 h, dobiju `status:"stale"` + `last_error`.
 Cron na boxu: `*/30 * * * * …/run_box.sh` (+ `@reboot`); `schedule_config.json` → `box` određuje što je due:
 VietinBank i ABA 07:30 i 12:00 (ICT), Bank of Ceylon 08:30 i 12:00 (IST); propušteni prozor se nadoknadi pri sljedećem pozivu.
-**Ako je box ugašen, ti izvori nakon 36 h postaju stale.**
+**Cloudflare Worker (primarno od 11.10.2026.):** `cloudflare/` (worker.js, wrangler.toml) dohvaća iste tri banke
+(cron VN/KH 07:30 + 12:30, LK 08:30 + 12:30 lokalno) i servira https://fx-box-sources.stjepan-20b.workers.dev/box_sources.json
+(`fetched_via:"cloudflare"`). Workflow ga prije `fetch_rates.py` povuče (greška se tolerira) i `scripts/merge_cf.py`
+ga spoji s commitanim `box_sources.json` (po izvoru pobjeđuje najnoviji `ok` unos). Box cron ostaje kao backup.
+Izvori postaju stale tek ako ni Worker ni box nisu imali uspješan dohvat 36 h.

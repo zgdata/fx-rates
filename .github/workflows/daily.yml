@@ -28,12 +28,24 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Get Cloudflare Worker box sources (VietinBank, ABA, BoC) and merge with box_sources.json
+        continue-on-error: true
+        run: |
+          if curl -fsS -m 30 -o /tmp/cf_sources.json https://fx-box-sources.stjepan-20b.workers.dev/box_sources.json; then
+            echo "got Cloudflare box_sources.json"
+          else
+            echo "Cloudflare Worker fetch failed - using committed box_sources.json only"; echo '{"sources":{}}' > /tmp/cf_sources.json
+          fi
+          python scripts/merge_cf.py box_sources.json /tmp/cf_sources.json /tmp/box_merged.json || cp box_sources.json /tmp/box_merged.json
+
       - name: Fetch due countries
         id: fetch
         env:
           BOT_TH_TOKEN: ${{ secrets.BOT_TH_TOKEN }}
         # Erste/OTP stay disabled (no FX_ENABLE_ERSTE / FX_OTP_BROWSER_UA)
-        run: python fetch_rates.py ${{ github.event_name == 'workflow_dispatch' && '--all' || '' }}
+        run: |
+          BOX=box_sources.json; [ -s /tmp/box_merged.json ] && BOX=/tmp/box_merged.json
+          python fetch_rates.py --box-out "$BOX" ${{ github.event_name == 'workflow_dispatch' && '--all' || '' }}
 
       - name: Commit (only if a country was checked or data changed)
         id: commit

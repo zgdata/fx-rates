@@ -1,0 +1,16 @@
+name = "fx-box-sources"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+account_id = "20b1bade1651d9e180e2b5c669d7aadb"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "FX_KV"
+id = "9e95c272c9ef4f09a26446d94e2d2bb5"
+
+[triggers]
+# UTC. VN/KH (UTC+7) 07:30 + 12:30 local; LK (UTC+5:30) 08:30 + 12:30 local.
+crons = ["30 0 * * *", "30 5 * * *", "0 3 * * *", "0 7 * * *"]
+
+[observability]
+enabled = true
