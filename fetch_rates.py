@@ -1081,6 +1081,10 @@ def run_source(s, cc=None, config=None):
         out["why"] = s["why"]
     out["fetched_at"] = now_utc()
     dis = ((config or {}).get("disabled") or {}).get(f"{cc}/{s['id']}")
+    box = ((config or {}).get("box_only") or {}).get(f"{cc}/{s['id']}")
+    if box:
+        out.update(status="skipped", error=f"box-only source (merged from box_sources.json): {box}", rates={})
+        return out
     if dis:
         out.update(status="skipped", error=f"disabled in sources_config.json: {dis}", rates={})
         return out
@@ -1186,6 +1190,74 @@ def index_prev(prev):
     return idx
 
 
+def _find_source(key):
+    cc, sid = key.split("/", 1)
+    c = COUNTRIES.get(cc) or {}
+    for s in [c.get("central_bank")] + (c.get("banks") or []):
+        if s and s["id"] == sid:
+            return cc, s
+    return cc, None
+
+
+def box_main(a, config):
+    """Box-side run: fetch only 'box_only' sources, write box_sources.json (keeps last good data on failure)."""
+    prev = {}
+    try:
+        with open(a.box_out, encoding="utf-8") as f:
+            prev = json.load(f).get("sources", {})
+    except Exception:
+        pass
+    out, now = {}, now_utc()
+    for key in sorted((config.get("box_only") or {})):
+        cc, s = _find_source(key)
+        if not s:
+            print(f"  {key}: unknown source")
+            continue
+        res = run_source(s, cc, None)          # no config -> not skipped
+        res = carry_over(res, {s["id"]: prev.get(key)} if prev.get(key) else {}, now)
+        out[key] = res
+        print(f"  {key}: {res['status']} {res.get('count', '')} {res.get('error') or res.get('last_error') or ''}")
+    doc = {"generated_at": now, "fetched_on": "box", "max_age_hours": a.box_max_age_h, "sources": out}
+    with open(a.box_out + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False, indent=1)
+    os.replace(a.box_out + ".tmp", a.box_out)
+    print(f"wrote {a.box_out} ({os.path.getsize(a.box_out)} bytes)")
+    return 0 if any(v["status"] == "ok" for v in out.values()) else 1
+
+
+def merge_box_sources(doc, path, config, max_age_h):
+    keys = config.get("box_only") or {}
+    if not keys:
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            box = json.load(f).get("sources", {})
+    except Exception:
+        box = {}
+    now = dt.datetime.now(dt.timezone.utc)
+    for key in keys:
+        cc, sid = key.split("/", 1)
+        c = doc["countries"].get(cc)
+        if not c:
+            continue
+        e = box.get(key)
+        if not e or not e.get("rates"):
+            continue                                   # stays 'skipped'
+        e = dict(e, fetched_via="box")
+        try:
+            age_h = (now - dt.datetime.fromisoformat(e["fetched_at"])).total_seconds() / 3600
+        except Exception:
+            age_h = 1e9
+        if e.get("status") == "ok" and age_h > max_age_h:
+            e["status"] = "stale"
+            e["stale_since"] = e.get("stale_since") or now.replace(microsecond=0).isoformat()
+            e["last_error"] = f"box data is {age_h:.0f} h old (> {max_age_h:.0f} h) – box fetcher not running?"
+        if c["central_bank"]["id"] == sid:
+            c["central_bank"] = e
+        else:
+            c["banks"] = [e if b["id"] == sid else b for b in c["banks"]]
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
@@ -1196,9 +1268,15 @@ def main():
     ap.add_argument("--only", default=None, help="comma list of country codes (testing)")
     ap.add_argument("--no-published", action="store_true", help="drop original HR 'published' numbers (smaller JSON)")
     ap.add_argument("--pretty", action="store_true")
+    ap.add_argument("--box-run", action="store_true",
+                    help="fetch only the sources listed in sources_config.json 'box_only' and write --box-out")
+    ap.add_argument("--box-out", default=os.path.join(here, "box_sources.json"))
+    ap.add_argument("--box-max-age-h", type=float, default=36.0)
     a = ap.parse_args()
     config = load_config(a.config)
     only = set(a.only.upper().split(",")) if a.only else None
+    if a.box_run:
+        return box_main(a, config)
 
     started = now_utc()
     doc = {"schema_version": 1, "generated_at": started, "checked_at": started,
@@ -1250,6 +1328,9 @@ def main():
     cc_map = load_country_currency(a.countries_file)
     if cc_map:
         doc["country_currency"] = cc_map
+
+    # ---- merge box-fetched sources (sources that block GitHub runners)
+    merge_box_sources(doc, a.box_out, config, a.box_max_age_h)
 
     # ---- fallback: carry over last good data for failed sources
     prev = {}

@@ -150,3 +150,11 @@ commita `rates.json` **samo ako su se promijenili podaci** (`scripts/changed.py`
 nema commita, pa `generated_at` u datoteci ostaje od zadnje promjene.
 GitHub Pages servira iz `main` / root (`.nojekyll` isključuje Jekyll). Pages šalje
 `Access-Control-Allow-Origin: *`, pa PWA može `fetch()` direktno.
+
+## Izvori koji blokiraju GitHub (box fetcher)
+VietinBank (VN), ABA (KH) i Bank of Ceylon (LK) vraćaju 403/405 GitHub runnerima. Oni su u
+`sources_config.json` pod `box_only`: GitHub ih preskače, a dohvaća ih `run_box.sh` na zasebnom računalu
+("box") u `box_sources.json` (commit `box: …`). Workflow ih spaja u `rates.json` / `rates/<CC>.json`
+s poljem `fetched_via:"box"`; ako su stariji od 36 h, dobiju `status:"stale"` + `last_error`.
+Cron na boxu: `47 * * * * …/run_box.sh` (pravi posao u 04:47 UTC ili kao catch-up ako su podaci > 23 h).
+**Ako je box ugašen, ti izvori nakon 36 h postaju stale.**

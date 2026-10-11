@@ -1,8 +1,9 @@
 {
-  "_comment": "Sources listed here are skipped (status 'skipped', no stale carry-over). Key = <ISO2>/<source id>.",
-  "disabled": {
-    "VN/vietinbank": "HTTP 405 'Not Allowed' from GitHub Actions runners (works from other networks)",
-    "KH/aba": "HTTP 403 Forbidden from GitHub Actions runners (works from box)",
-    "LK/boc_lk": "HTTP 403 Forbidden from GitHub Actions runners (works from box)"
+  "_comment": "disabled = never fetched (status skipped). box_only = skipped on GitHub, fetched by run_box.sh on the box into box_sources.json and merged by the workflow (stale if older than 36 h). Key = <ISO2>/<source id>.",
+  "disabled": {},
+  "box_only": {
+    "VN/vietinbank": "HTTP 405 from GitHub Actions runners – fetched on the box (run_box.sh, cron)",
+    "KH/aba": "HTTP 403 from GitHub Actions runners – fetched on the box (run_box.sh, cron)",
+    "LK/boc_lk": "HTTP 403 from GitHub Actions runners – fetched on the box (run_box.sh, cron)"
   }
 }

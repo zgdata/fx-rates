@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 sample.json
 *.tmp
+box_cron.log
