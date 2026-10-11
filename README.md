@@ -1,0 +1,137 @@
+# fx-rates – dnevni dohvat tečajeva za travel converter (PWA)
+
+**Podaci (osvježava se automatski svaki dan u 05:17 UTC):**
+- GitHub Pages: `https://zgdata.github.io/fx-rates/rates.json`
+- jsDelivr CDN: `https://cdn.jsdelivr.net/gh/zgdata/fx-rates@main/rates.json` (CDN cache do ~12 h)
+
+> **Atribucija / napomena (obavezno prikazati u appu):**
+> - Globalni referentni tečajevi iz open.er-api.com: **"Rates By Exchange Rate API"** (https://www.exchangerate-api.com).
+> - Tečajevi banaka su **informativni**; preuzeti s javnih stranica banaka, mogu kasniti ili se razlikovati od tečaja u poslovnici. Za stvarnu transakciju vrijedi tečaj banke.
+> - ECB referentni tečajevi služe samo za informaciju.
+
+Jedna skripta (`fetch_rates.py`) → jedna datoteka (`rates.json`). App je povuče 1× dnevno,
+spremi offline (Cache API / IndexedDB) i radi bez interneta.
+
+## Pokretanje
+```bash
+pip install requests          # jedina ovisnost (Python 3.9+)
+python3 fetch_rates.py        # piše ./rates.json (kompaktno, ~58 KB, ~15 KB gzip)
+python3 fetch_rates.py --pretty --no-published   # čitljivo / bez originalnih HR brojeva
+FX_DEBUG=1 python3 fetch_rates.py               # ispiše traceback za banke koje padnu
+```
+Izlazni kod 0 ako je barem jedna banka uspjela (ok ili stale). Svaka banka je izolirana.
+
+**Fallback (stale):** ako izvor padne, a u prethodnom `rates.json` postoje njegovi podaci, oni se
+prenose i označe `status:"stale"`, uz originalni `fetched_at` (kad su podaci zaista dohvaćeni),
+`stale_since` (prvi neuspjeli pokušaj), `last_error` i `last_attempt_at`. Ako prethodnih podataka nema,
+ostaje `status:"error"` + `error`. App: za `stale` prikaži "zadnje provjereno <fetched_at>".
+
+Opt-in prekidači (po defaultu ISKLJUČENI, vidi "Pravila"):
+- `FX_ENABLE_ERSTE=1` – Erste (API host `local.erstebank.hr` ima robots.txt `Disallow: /`)
+- `FX_OTP_BROWSER_UA=1` – OTP (WAF vraća 403 za svaki ne-browser User-Agent)
+
+## Izvori
+| Država | Izvor | Endpoint | Format |
+|---|---|---|---|
+| HR | HNB (središnja) | `api.hnb.hr/tecajn-eur/v3` | službeni JSON API |
+| HR | PBZ | `pbz.hr/digitalServicesServlet/?operation=getExchangeRates&listType=PBZ…` | JSON (koristi ga njihova stranica) |
+| HR | Zagrebačka banka | `zaba.hr/home/tecajnaDok/txt/<YYYY-MM-DD>` | službeni TXT download |
+| HR | RBA | `rba.hr/hr.exchangerates.<YYYYMMDD>.BASE.<valute>.EUR.TARGET.json` | JSON (njihova stranica) |
+| HR | Addiko | `addiko.hr/gradanstvo/izracuni/tecajna-lista/` | HTML tablica |
+| HR | OTP | `otpbanka.hr/apps/elementa/getExchangeRates?date=dd.mm.yyyy.` | JSON – opt-in |
+| HR | Erste | `local.erstebank.hr/api/v1/fx` | JSON – opt-in |
+| VN | SBV tỷ giá trung tâm (USD) | iz Techcombank JSON-a (`otherRate`) | sbv.gov.vn odbija veze izvan VN |
+| VN | Vietcombank | `vietcombank.com.vn/api/exchangerates?date=` (fallback XML `pXML.aspx`) | JSON / XML |
+| VN | BIDV | `bidv.com.vn/ServicesBIDV/ExchangeDetailServlet` | JSON |
+| VN | VietinBank | `vietinbank.vn/ca-nhan/ty-gia-khcn` | HTML (SSR) |
+| VN | Agribank | `agribank.com.vn/vn/ty-gia` | HTML tablica |
+| VN | Techcombank | `techcombank.com/…/ty-gia/_jcr_content.exchange-rates.integration.json` | JSON |
+| VN | ACB | `acb.com.vn/api/front/v1/currency?currency=VND&effectiveDateTime=` | JSON |
+| svijet | ECB | `ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml` | ~30 valuta, radnim danom |
+| svijet | ExchangeRate-API | `open.er-api.com/v6/latest/EUR` | ~166 valuta, bez ključa, **traži atribuciju** |
+| svijet | fawazahmed0 | `cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json` | ~160 fiat (krypto izbačen) |
+
+`country_currency.json` (statično, iz datasets/country-codes, ISO 3166 → ISO 4217) mapira
+svaku državu na valutu, pa svaka država ima barem referentni (mid) tečaj iz `global_reference`.
+
+## Konvencija brojeva (VAŽNO)
+U `countries.<CC>.*.rates.<VALUTA>`:
+**vrijednost = koliko LOKALNE valute vrijedi 1 jedinica strane valute.**
+- HR (EUR): `USD.middle = 0.8924` → 1 USD = 0,8924 EUR
+- VN (VND): `EUR.middle = 29222` → 1 EUR = 29.222 VND
+- `buy` = banka KUPUJE stranu valutu od tebe (ti prodaješ), `sell` = banka PRODAJE tebi. Uvijek buy ≤ middle ≤ sell.
+- `transfer` = devize / bezgotovinski / chuyển khoản; `cash` = efektiva / gotovina / tiền mặt.
+- HR banke objavljuju obrnuto ("1 EUR = 1,1206 USD"). Skripta invertira; originalni brojevi su u `published`
+  (makni ih s `--no-published`). Za prikaz "1 EUR = x USD" u appu: `1 / middle`, a za kupovni/prodajni
+  zamijeni: `1/transfer.buy` = HR "kupovni", `1/transfer.sell` = HR "prodajni".
+- VN banke ne objavljuju srednji tečaj → `middle` = prosjek (transfer.buy + transfer.sell)/2,
+  označeno s `middle_source:"computed_avg_transfer"`. HR banke: `"published"`.
+- `null` = banka tu vrstu tečaja ne nudi (npr. HNB nema efektivu, mnoge banke nemaju cash za DKK/NOK/SEK).
+- USD/EUR u VN: uzima se tečaj za krupne apoene (50/100); manji apoeni se ignoriraju.
+
+U `global_reference.<izvor>.rates_per_eur`: **koliko jedinica valute za 1 EUR** (mid).
+Kros tečaj X→Y = `rates_per_eur[Y] / rates_per_eur[X]`.
+
+## Shema (rates.json)
+```jsonc
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-11T14:52:10+00:00",      // UTC; = "AI bot provjerio" timestamp
+  "finished_at": "…",
+  "convention": "…tekstualni opis gore…",
+  "countries": {
+    "HR": {
+      "name": "Hrvatska", "name_en": "Croatia", "local_currency": "EUR",
+      "central_bank": <Source>,
+      "banks": [<Source>, …]
+    },
+    "VN": { … }
+  },
+  "global_reference": {
+    "ecb":          { …Source polja…, "valid_for": "2026-10-09", "rates_per_eur": {"USD":1.1206,…} },
+    "open_er_api":  { …, "attribution": "Rates By Exchange Rate API (https://www.exchangerate-api.com)", "rates_per_eur": {…} },
+    "fawazahmed0":  { …, "rates_per_eur": {…} }
+  },
+  "country_currency": { "HR": {"currency":"EUR","name_en":"Croatia"}, "VN": {"currency":"VND",…}, … },
+  "sanity_warnings": ["VN/bidv/LAK middle: 1.05 vs ref 1.167 (10.1%)"],
+  "summary": { "HR": {"hnb":"ok","pbz":"ok",…,"otp":"error"}, "VN": {…}, "global": {…} }
+}
+
+<Source> = {
+  "id": "pbz", "name": "Privredna banka Zagreb (PBZ)", "kind": "bank|central_bank|reference",
+  "url": "endpoint koji je skripta zvala", "page_url": "javna stranica za link 'izvor' u appu",
+  "status": "ok|stale|error|skipped", "error": "poruka (error/skipped)",
+  "stale_since": "UTC ISO (samo stale)", "last_error": "…", "last_attempt_at": "UTC ISO",
+  "fetched_at": "UTC ISO", "elapsed_ms": 420, "count": 13,
+  "valid_for": "YYYY-MM-DD (datum primjene liste, ako ga banka daje)",
+  "published_at": "ISO s offsetom (VN banke – vrijeme objave)",
+  "list_number": 199,
+  "middle_source": "published|computed_avg_transfer",
+  "rates": { "USD": {
+      "middle": 0.89317613,
+      "transfer": {"buy": 0.8671613, "sell": 0.92080014},
+      "cash":     {"buy": 0.85857545, "sell": 0.93010105},
+      "published": {…samo HR, originalni "1 EUR = x" brojevi…},
+      "floor": …, "ceiling": …            // samo SBV središnji tečaj
+  } }
+}
+```
+
+## Provjera ispravnosti
+`sanity_warnings` nastaju automatski: middle banke vs ECB/open.er-api > 4 %, buy/sell > 30 %,
+buy > sell, i EUR/VND izvan 24k–35k. Upozorenja za LAK su očekivana (službeni i tržišni kip se razlikuju).
+
+## Pravila / ToS
+- Skripta se predstavlja vlastitim User-Agentom (`TravelFXFetcher/1.0`), radi 1 request po izvoru dnevno.
+- Bez zaobilaženja captcha/WAF-a. Erste i OTP su zato isključeni dok ne odlučiš (vidi gore).
+- open.er-api.com: besplatan bez ključa, ali traži vidljivu atribuciju u appu i max ~1 poziv/dan je sasvim OK.
+- Vietcombank XML feed: max 1 request / 5 min (mi radimo 1/dan).
+- Tečajevi banaka su informativni; u appu napiši "informativno, provjeri u banci".
+
+## Automatizacija (GitHub Actions)
+`.github/workflows/daily.yml`: cron `17 5 * * *` + ručni `workflow_dispatch`. Pokrene skriptu i
+commita `rates.json` **samo ako su se promijenili podaci** (`scripts/changed.py` ignorira
+`generated_at`, `fetched_at`, `elapsed_ms`… ). Posljedica: kad banke ne objave novu listu (vikend),
+nema commita, pa `generated_at` u datoteci ostaje od zadnje promjene.
+GitHub Pages servira iz `main` / root (`.nojekyll` isključuje Jekyll). Pages šalje
+`Access-Control-Allow-Origin: *`, pa PWA može `fetch()` direktno.
