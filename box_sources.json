@@ -1,0 +1,690 @@
+{
+ "generated_at": "2026-10-11T15:28:38+00:00",
+ "fetched_on": "box",
+ "max_age_hours": 36.0,
+ "sources": {
+  "KH/aba": {
+   "id": "aba",
+   "name": "ABA Bank",
+   "kind": "bank",
+   "url": "https://www.ababank.com/en/forex-exchange/",
+   "page_url": "https://www.ababank.com/en/forex-exchange/",
+   "fetched_at": "2026-10-11T15:28:38+00:00",
+   "middle_source": "computed_avg_transfer",
+   "rates": {
+    "AUD": {
+     "middle": 2821.67,
+     "transfer": {
+      "buy": 2748.31,
+      "sell": 2895.03
+     },
+     "cash": {
+      "buy": 2697.47,
+      "sell": 2916.64
+     }
+    },
+    "CAD": {
+     "middle": 2844.43,
+     "transfer": {
+      "buy": 2770.55,
+      "sell": 2918.31
+     },
+     "cash": {
+      "buy": 2610.42,
+      "sell": 2939.94
+     }
+    },
+    "CNY": {
+     "middle": 604.61,
+     "transfer": {
+      "buy": 588.91,
+      "sell": 620.31
+     },
+     "cash": {
+      "buy": 554.87,
+      "sell": 624.91
+     }
+    },
+    "EUR": {
+     "middle": 4537.305,
+     "transfer": {
+      "buy": 4419.34,
+      "sell": 4655.27
+     },
+     "cash": {
+      "buy": 4405.72,
+      "sell": 4690.03
+     }
+    },
+    "GBP": {
+     "middle": 5354.245,
+     "transfer": {
+      "buy": 5215.04,
+      "sell": 5493.45
+     },
+     "cash": {
+      "buy": 5172.16,
+      "sell": 5534.46
+     }
+    },
+    "HKD": {
+     "middle": 500.98,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 468.96,
+      "sell": 533.0
+     }
+    },
+    "JPY": {
+     "middle": 25.57065,
+     "transfer": {
+      "buy": 24.9065,
+      "sell": 26.2348
+     },
+     "cash": {
+      "buy": 24.1311,
+      "sell": 26.4293
+     }
+    },
+    "KRW": {
+     "middle": 3.0253,
+     "transfer": {
+      "buy": 2.9356,
+      "sell": 3.115
+     },
+     "cash": {
+      "buy": null,
+      "sell": null
+     }
+    },
+    "MYR": {
+     "middle": 962.345,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 900.83,
+      "sell": 1023.86
+     }
+    },
+    "SGD": {
+     "middle": 3161.055,
+     "transfer": {
+      "buy": 3078.95,
+      "sell": 3243.16
+     },
+     "cash": {
+      "buy": 3011.5,
+      "sell": 3267.19
+     }
+    },
+    "THB": {
+     "middle": 120.67,
+     "transfer": {
+      "buy": 117.54,
+      "sell": 123.8
+     },
+     "cash": {
+      "buy": 115.51,
+      "sell": 124.72
+     }
+    },
+    "USD": {
+     "middle": 4063.0,
+     "transfer": {
+      "buy": 4048.0,
+      "sell": 4078.0
+     },
+     "cash": {
+      "buy": 4048.0,
+      "sell": 4078.0
+     }
+    },
+    "VND": {
+     "middle": 0.15695,
+     "transfer": {
+      "buy": 0.1523,
+      "sell": 0.1616
+     },
+     "cash": {
+      "buy": 0.1422,
+      "sell": 0.1616
+     }
+    }
+   },
+   "status": "ok",
+   "count": 13,
+   "elapsed_ms": 396
+  },
+  "LK/boc_lk": {
+   "id": "boc_lk",
+   "name": "Bank of Ceylon",
+   "kind": "bank",
+   "url": "https://www.boc.lk/rates-tariff",
+   "page_url": "https://www.boc.lk/rates-tariff",
+   "fetched_at": "2026-10-11T15:28:39+00:00",
+   "published_at": null,
+   "middle_source": "computed_avg_transfer",
+   "note": "cash = Currency notes, transfer = Telegraphic transfers",
+   "rates": {
+    "AED": {
+     "middle": 88.1918,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 81.4525,
+      "sell": 94.9311
+     }
+    },
+    "AUD": {
+     "middle": 230.6685,
+     "transfer": {
+      "buy": 223.9228,
+      "sell": 237.4142
+     },
+     "cash": {
+      "buy": 223.4916,
+      "sell": 237.4142
+     }
+    },
+    "BHD": {
+     "middle": 821.455,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 751.6886,
+      "sell": 891.2214
+     }
+    },
+    "CAD": {
+     "middle": 233.0011,
+     "transfer": {
+      "buy": 227.6537,
+      "sell": 238.3485
+     },
+     "cash": {
+      "buy": 226.2629,
+      "sell": 238.3485
+     }
+    },
+    "CHF": {
+     "middle": 399.4469,
+     "transfer": {
+      "buy": 390.1449,
+      "sell": 408.7489
+     },
+     "cash": {
+      "buy": 377.6275,
+      "sell": 408.7489
+     }
+    },
+    "CNY": {
+     "middle": 49.4101,
+     "transfer": {
+      "buy": 48.3001,
+      "sell": 50.5201
+     },
+     "cash": {
+      "buy": 45.7576,
+      "sell": 50.5201
+     }
+    },
+    "DKK": {
+     "middle": 49.7466,
+     "transfer": {
+      "buy": 48.4523,
+      "sell": 51.0409
+     },
+     "cash": {
+      "buy": null,
+      "sell": null
+     }
+    },
+    "EUR": {
+     "middle": 370.8311,
+     "transfer": {
+      "buy": 363.9407,
+      "sell": 377.7215
+     },
+     "cash": {
+      "buy": 360.9549,
+      "sell": 377.5852
+     }
+    },
+    "GBP": {
+     "middle": 438.2409,
+     "transfer": {
+      "buy": 431.1867,
+      "sell": 445.2951
+     },
+     "cash": {
+      "buy": 428.1014,
+      "sell": 445.7381
+     }
+    },
+    "HKD": {
+     "middle": 42.1821,
+     "transfer": {
+      "buy": 41.2526,
+      "sell": 43.1116
+     },
+     "cash": {
+      "buy": 39.3922,
+      "sell": 43.1116
+     }
+    },
+    "INR": {
+     "middle": 3.3721,
+     "transfer": {
+      "buy": 3.0696,
+      "sell": 3.6746
+     },
+     "cash": {
+      "buy": 2.8596,
+      "sell": 3.6796
+     }
+    },
+    "JOD": {
+     "middle": 448.2397,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 418.6247,
+      "sell": 477.8547
+     }
+    },
+    "JPY": {
+     "middle": 2.0972,
+     "transfer": {
+      "buy": 2.0568,
+      "sell": 2.1376
+     },
+     "cash": {
+      "buy": 2.0271,
+      "sell": 2.1376
+     }
+    },
+    "KRW": {
+     "middle": 0.24815,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 0.2421,
+      "sell": 0.2542
+     }
+    },
+    "KWD": {
+     "middle": 1015.2604,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 934.3276,
+      "sell": 1096.1932
+     }
+    },
+    "MYR": {
+     "middle": 79.7438,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 76.5288,
+      "sell": 82.9588
+     }
+    },
+    "NOK": {
+     "middle": 34.6685,
+     "transfer": {
+      "buy": 33.8712,
+      "sell": 35.4658
+     },
+     "cash": {
+      "buy": null,
+      "sell": null
+     }
+    },
+    "NZD": {
+     "middle": 185.9413,
+     "transfer": {
+      "buy": 180.741,
+      "sell": 191.1416
+     },
+     "cash": {
+      "buy": 178.6178,
+      "sell": 191.1416
+     }
+    },
+    "OMR": {
+     "middle": 834.42555,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 796.5137,
+      "sell": 872.3374
+     }
+    },
+    "QAR": {
+     "middle": 82.69265,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 72.4012,
+      "sell": 92.9841
+     }
+    },
+    "SAR": {
+     "middle": 85.72795,
+     "transfer": {
+      "buy": null,
+      "sell": null
+     },
+     "cash": {
+      "buy": 77.8381,
+      "sell": 93.6178
+     }
+    },
+    "SEK": {
+     "middle": 33.265,
+     "transfer": {
+      "buy": 32.4681,
+      "sell": 34.0619
+     },
+     "cash": {
+      "buy": null,
+      "sell": null
+     }
+    },
+    "SGD": {
+     "middle": 258.9213,
+     "transfer": {
+      "buy": 253.7231,
+      "sell": 264.1195
+     },
+     "cash": {
+      "buy": 248.3483,
+      "sell": 264.1195
+     }
+    },
+    "THB": {
+     "middle": 10.2141,
+     "transfer": {
+      "buy": 9.7391,
+      "sell": 10.6891
+     },
+     "cash": {
+      "buy": 9.6891,
+      "sell": 10.9191
+     }
+    },
+    "USD": {
+     "middle": 331.0,
+     "transfer": {
+      "buy": 326.5,
+      "sell": 335.5
+     },
+     "cash": {
+      "buy": 326.5,
+      "sell": 335.5
+     }
+    },
+    "ZAR": {
+     "middle": 20.0287,
+     "transfer": {
+      "buy": 19.5486,
+      "sell": 20.5088
+     },
+     "cash": {
+      "buy": null,
+      "sell": null
+     }
+    }
+   },
+   "status": "ok",
+   "count": 26,
+   "elapsed_ms": 3006
+  },
+  "VN/vietinbank": {
+   "id": "vietinbank",
+   "name": "VietinBank",
+   "kind": "bank",
+   "url": "https://www.vietinbank.vn/ca-nhan/ty-gia-khcn",
+   "page_url": "https://www.vietinbank.vn/ca-nhan/ty-gia-khcn",
+   "fetched_at": "2026-10-11T15:28:42+00:00",
+   "published_at": "2026-10-11T13:45:00+07:00",
+   "middle_source": "computed_avg_transfer",
+   "rates": {
+    "USD": {
+     "middle": 25835.0,
+     "transfer": {
+      "buy": 25565.0,
+      "sell": 26105.0
+     },
+     "cash": {
+      "buy": 25565.0,
+      "sell": 26105.0
+     }
+    },
+    "EUR": {
+     "middle": 29111.0,
+     "transfer": {
+      "buy": 28321.0,
+      "sell": 29901.0
+     },
+     "cash": {
+      "buy": 28181.0,
+      "sell": 29901.0
+     }
+    },
+    "JPY": {
+     "middle": 164.24,
+     "transfer": {
+      "buy": 158.74,
+      "sell": 169.74
+     },
+     "cash": {
+      "buy": 158.24,
+      "sell": 169.74
+     }
+    },
+    "GBP": {
+     "middle": 34312.5,
+     "transfer": {
+      "buy": 33700.0,
+      "sell": 34925.0
+     },
+     "cash": {
+      "buy": 33745.0,
+      "sell": 34925.0
+     }
+    },
+    "AUD": {
+     "middle": 18159.0,
+     "transfer": {
+      "buy": 17709.0,
+      "sell": 18609.0
+     },
+     "cash": {
+      "buy": 17659.0,
+      "sell": 18609.0
+     }
+    },
+    "CAD": {
+     "middle": 18219.0,
+     "transfer": {
+      "buy": 17854.0,
+      "sell": 18584.0
+     },
+     "cash": {
+      "buy": 17734.0,
+      "sell": 18584.0
+     }
+    },
+    "CHF": {
+     "middle": 31206.0,
+     "transfer": {
+      "buy": 30676.0,
+      "sell": 31736.0
+     },
+     "cash": {
+      "buy": 30706.0,
+      "sell": 31736.0
+     }
+    },
+    "CNY": {
+     "middle": 3869.0,
+     "transfer": {
+      "buy": 3794.0,
+      "sell": 3944.0
+     },
+     "cash": {
+      "buy": null,
+      "sell": 3944.0
+     }
+    },
+    "DKK": {
+     "middle": 3877.5,
+     "transfer": {
+      "buy": 3785.0,
+      "sell": 3970.0
+     },
+     "cash": {
+      "buy": null,
+      "sell": 3970.0
+     }
+    },
+    "HKD": {
+     "middle": 3275.5,
+     "transfer": {
+      "buy": 3173.0,
+      "sell": 3378.0
+     },
+     "cash": {
+      "buy": 3173.0,
+      "sell": 3378.0
+     }
+    },
+    "KRW": {
+     "middle": 19.14,
+     "transfer": {
+      "buy": 17.14,
+      "sell": 21.14
+     },
+     "cash": {
+      "buy": 16.34,
+      "sell": 21.14
+     }
+    },
+    "LAK": {
+     "middle": 0.985,
+     "transfer": {
+      "buy": 0.66,
+      "sell": 1.31
+     },
+     "cash": {
+      "buy": null,
+      "sell": 1.31
+     }
+    },
+    "NOK": {
+     "middle": 2694.5,
+     "transfer": {
+      "buy": 2622.0,
+      "sell": 2767.0
+     },
+     "cash": {
+      "buy": null,
+      "sell": 2767.0
+     }
+    },
+    "NZD": {
+     "middle": 14572.5,
+     "transfer": {
+      "buy": 14270.0,
+      "sell": 14875.0
+     },
+     "cash": {
+      "buy": 14285.0,
+      "sell": 14875.0
+     }
+    },
+    "SEK": {
+     "middle": 2582.5,
+     "transfer": {
+      "buy": 2511.0,
+      "sell": 2654.0
+     },
+     "cash": {
+      "buy": null,
+      "sell": 2654.0
+     }
+    },
+    "SGD": {
+     "middle": 20114.5,
+     "transfer": {
+      "buy": 19637.0,
+      "sell": 20592.0
+     },
+     "cash": {
+      "buy": 19682.0,
+      "sell": 20592.0
+     }
+    },
+    "THB": {
+     "middle": 773.89,
+     "transfer": {
+      "buy": 759.24,
+      "sell": 788.54
+     },
+     "cash": {
+      "buy": 720.54,
+      "sell": 788.54
+     }
+    },
+    "SAR": {
+     "middle": 6949.5,
+     "transfer": {
+      "buy": 6654.5,
+      "sell": 7244.5
+     },
+     "cash": {
+      "buy": null,
+      "sell": 7244.5
+     }
+    },
+    "KWD": {
+     "middle": 84481.0,
+     "transfer": {
+      "buy": 81331.0,
+      "sell": 87631.0
+     },
+     "cash": {
+      "buy": null,
+      "sell": 87631.0
+     }
+    }
+   },
+   "status": "ok",
+   "count": 19,
+   "elapsed_ms": 1300
+  }
+ }
+}
