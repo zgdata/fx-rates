@@ -1,6 +1,8 @@
 {
   "_comment": "Sources listed here are skipped (status 'skipped', no stale carry-over). Key = <ISO2>/<source id>.",
   "disabled": {
-    "VN/vietinbank": "HTTP 405 'Not Allowed' from GitHub Actions runners (works from other networks)"
+    "VN/vietinbank": "HTTP 405 'Not Allowed' from GitHub Actions runners (works from other networks)",
+    "KH/aba": "HTTP 403 Forbidden from GitHub Actions runners (works from box)",
+    "LK/boc_lk": "HTTP 403 Forbidden from GitHub Actions runners (works from box)"
   }
 }
