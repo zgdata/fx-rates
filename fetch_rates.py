@@ -900,6 +900,46 @@ def isbank():
     return {"middle_source": "computed_avg_transfer", "note": "İşbank FX board (live, changes during the day)", "rates": rates}
 
 
+# --- Thailand: Bank of Thailand API (token in env BOT_TH_TOKEN)
+def bot_th():
+    tok = (os.environ.get("BOT_TH_TOKEN") or "").strip()
+    if not tok:
+        raise SkipSource("BOT_TH_TOKEN not set")
+    end = dt.datetime.now(TZ_HR).date()
+    q = f"?start_period={(end - dt.timedelta(days=7)).isoformat()}&end_period={end.isoformat()}"
+    hdr = {"Authorization": tok, "Accept": "application/json"}
+    base = "https://gateway.api.bot.or.th"
+    det = get(f"{base}/Stat-ExchangeRate/v2/DAILY_AVG_EXG_RATE/{q}", headers=hdr).json()["result"]["data"]["data_detail"]
+    det = [x for x in det if x.get("period")]
+    if not det:
+        raise RuntimeError("no data in the last 7 days")
+    latest = max(x["period"] for x in det)
+    rates = {}
+    for x in det:
+        if x["period"] != latest:
+            continue
+        m = re.search(r"\(([\d,]+)\s", x.get("currency_name_eng") or "")
+        unit = int(m.group(1).replace(",", "")) if m else 1
+        row = lrow(unit, num(x.get("mid_rate")), num(x.get("buying_transfer")), num(x.get("selling")), compute_mid=False)
+        bs = num(x.get("buying_sight"))
+        row["buying_sight"] = r8(bs / unit) if bs else None
+        rates[x["currency_id"]] = row
+    out = {"valid_for": latest, "middle_source": "published (BOT mid_rate)",
+           "note": ("Prosjek komercijalnih banaka u Bangkoku (BOT). transfer.buy = buying_transfer (TT), "
+                    "transfer.sell = selling, buying_sight = čekovi/mjenice; BOT ne objavljuje tečaj za gotovinu."),
+           "url": f"{base}/Stat-ExchangeRate/v2/DAILY_AVG_EXG_RATE/{q}", "rates": rates}
+    try:
+        ref = get(f"{base}/Stat-ReferenceRate/v2/DAILY_REF_RATE/{q}", headers=hdr).json()["result"]["data"]["data_detail"]
+        ref = [x for x in ref if x.get("period") and num(x.get("rate"))]
+        if ref and "USD" in rates:
+            r = max(ref, key=lambda x: x["period"])
+            rates["USD"]["reference_rate"] = num(r["rate"])
+            out["reference_rate_date"] = r["period"]
+    except Exception as e:
+        out["reference_rate_error"] = f"{type(e).__name__}"[:100]
+    return out
+
+
 TOURIST_SET = ["USD", "EUR", "GBP", "CHF", "JPY", "CNY", "AUD", "CAD", "NZD", "SGD", "HKD", "KRW", "THB", "IDR",
                "MYR", "PHP", "VND", "INR", "AED", "TRY", "PLN", "CZK", "HUF", "RON", "SEK", "NOK", "DKK", "RSD",
                "BAM", "MKD", "ALL", "KHR", "LAK", "LKR", "TWD", "SAR", "ILS", "BRL", "MXN", "ZAR", "EGP", "QAR"]
@@ -1036,7 +1076,8 @@ WORLD = {
             "https://www.bi.go.id/id/statistik/informasi-kurs/transaksi-bi/default.aspx", "https://www.bi.go.id/id/statistik/informasi-kurs/jisdor/default.aspx", bank_indonesia), [
         source("bca", "Bank Central Asia (BCA)", "bank", "https://www.bca.co.id/id/informasi/kurs", "https://www.bca.co.id/id/informasi/kurs", bca),
         source("mandiri", "Bank Mandiri", "bank", "https://www.bankmandiri.co.id/kurs", "https://www.bankmandiri.co.id/kurs", mandiri)]),
-    "TH": ("Tajland", "Thailand", "THB", fallback_src("THB", "BOT API traži ključ; stranica BOT-a puni podatke JS-om"), []),
+    "TH": ("Tajland", "Thailand", "THB", source("bot", "Bank of Thailand (prosjek banaka u Bangkoku)", "central_bank",
+            "https://gateway.api.bot.or.th/Stat-ExchangeRate/v2/DAILY_AVG_EXG_RATE/", "https://www.bot.or.th/en/statistics/exchange-rate.html", bot_th), []),
     "MY": ("Malezija", "Malaysia", "MYR", source("bnm", "Bank Negara Malaysia (BNM)", "central_bank",
             "https://api.bnm.gov.my/public/exchange-rate", "https://www.bnm.gov.my/exchange-rates", bnm), []),
     "SG": ("Singapur", "Singapore", "SGD", fallback_src("SGD", "MAS API nedostupan (maintenance stranica)"), []),
@@ -1075,6 +1116,10 @@ def load_config(path):
         return {}
 
 
+class SkipSource(Exception):
+    """Raised by an adapter that cannot run in this environment (e.g. missing API token)."""
+
+
 def run_source(s, cc=None, config=None):
     out = {k: s[k] for k in ("id", "name", "kind", "url", "page_url")}
     if s.get("why"):
@@ -1099,6 +1144,9 @@ def run_source(s, cc=None, config=None):
         out["count"] = len(res.get("rates") or res.get("rates_per_eur") or {})
         if not out["count"]:
             raise RuntimeError("source returned 0 rates")
+    except SkipSource as e:
+        out.update(status="skipped", error=str(e), rates={})
+        out.pop("count", None)
     except Exception as e:
         out.update(status="error", error=f"{type(e).__name__}: {str(e)[:300]}", rates={})
         out.pop("count", None)

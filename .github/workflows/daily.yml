@@ -27,6 +27,8 @@ jobs:
       - run: pip install -r requirements.txt
 
       - name: Fetch rates
+        env:
+          BOT_TH_TOKEN: ${{ secrets.BOT_TH_TOKEN }}
         run: python fetch_rates.py   # Erste/OTP stay disabled (no FX_ENABLE_ERSTE / FX_OTP_BROWSER_UA)
 
       - name: Commit rates (daily; heartbeat commit even if only timestamps changed)

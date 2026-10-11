@@ -37,7 +37,7 @@ Opt-in prekidači (po defaultu ISKLJUČENI, vidi "Pravila"):
 HR, VN (banke), eurozona DE FR IT ES AT NL SI BG ME XK (ECB; SI + NLB), PL (NBP), CZ (ČNB + KB),
 HU (MNB), RO (globalni fallback), SE (Riksbank), DK (Nationalbanken), RS (NBS), BA (CBBH), MK (NBRM),
 AL (BoA), ID (Bank Indonesia + BCA + Mandiri), MY (BNM), KH (NBC + ABA + ACLEDA), LA (BCEL), JP (MUFG),
-CN (CFETS + Bank of China), LK (Bank of Ceylon), TR (TCMB + İşbank), te TH, SG, PH, KR, IN, AE (globalni fallback).
+CN (CFETS + Bank of China), LK (Bank of Ceylon), TR (TCMB + İşbank), TH (Bank of Thailand API, token u secretu `BOT_TH_TOKEN`), te SG, PH, KR, IN, AE (globalni fallback).
 Gdje nema središnje banke, `central_bank` je `{"id":"global_reference","kind":"reference"}` izveden iz open.er-api.com
 (mid, ~40 turističkih valuta), s poljem `why`.
 
