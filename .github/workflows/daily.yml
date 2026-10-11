@@ -41,3 +41,10 @@ jobs:
             git commit -m "$kind: $(date -u +%Y-%m-%dT%H:%MZ)"
             git push
           fi
+
+      - name: Purge jsDelivr cache (best effort)
+        continue-on-error: true
+        run: |
+          for f in rates.json rates/index.json rates/global.json; do
+            curl -fsS -m 20 "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/$f" >/dev/null && echo "purged $f" || echo "purge failed: $f"
+          done
