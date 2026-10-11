@@ -1,11 +1,12 @@
 # fx-rates – dnevni dohvat tečajeva za travel converter (PWA)
 
-**Podaci (osvježava se automatski svaki dan u 05:17 UTC):**
+**Podaci (osvježava se po državi, u lokalno jutro / prijepodne / popodne te države – vidi `schedule_config.json`):**
 - Sve u jednoj datoteci: `https://zgdata.github.io/fx-rates/rates.json`
 - Po državi: `https://zgdata.github.io/fx-rates/rates/<ISO2>.json` (npr. `rates/ID.json`), popis: `rates/index.json`,
   globalni referentni tečajevi + mapa država→valuta: `rates/global.json`
 - jsDelivr CDN (backup): `https://cdn.jsdelivr.net/gh/zgdata/fx-rates@main/rates.json` (CDN cache do ~12 h, browser do 7 dana – koristi Pages kao primarni)
-- `checked_at` / `generated_at` = vrijeme zadnje provjere (svaki dan, i kad se tečajevi nisu promijenili).
+- `countries.<CC>.checked_at` = kad je ta država zadnji put provjerena (za "AI bot provjerio"); vrh datoteke `generated_at`/`checked_at` = zadnji commit, `global_checked_at` = globalni izvori.
+- `rates/index.json` → `countries.<CC>.next_refresh_at` (UTC) = sljedeći planirani prozor (stvarni dohvat je prvi satni run nakon toga, tj. do ~1 h kasnije).
 
 > **Atribucija / napomena (obavezno prikazati u appu):**
 > - Globalni referentni tečajevi iz open.er-api.com: **"Rates By Exchange Rate API"** (https://www.exchangerate-api.com).
@@ -137,17 +138,23 @@ Kros tečaj X→Y = `rates_per_eur[Y] / rates_per_eur[X]`.
 buy > sell, i EUR/VND izvan 24k–35k. Upozorenja za LAK su očekivana (službeni i tržišni kip se razlikuju).
 
 ## Pravila / ToS
-- Skripta se predstavlja vlastitim User-Agentom (`TravelFXFetcher/1.0`), radi 1 request po izvoru dnevno.
+- Skripta se predstavlja vlastitim User-Agentom (`TravelFXFetcher/1.0`), radi 1 request po izvoru po prozoru (1–5× dnevno, vidi `schedule_config.json`).
 - Bez zaobilaženja captcha/WAF-a. Erste i OTP su zato isključeni dok ne odlučiš (vidi gore).
 - open.er-api.com: besplatan bez ključa, ali traži vidljivu atribuciju u appu i max ~1 poziv/dan je sasvim OK.
-- Vietcombank XML feed: max 1 request / 5 min (mi radimo 1/dan).
+- Vietcombank XML feed: max 1 request / 5 min (mi radimo ≤ 5/dan).
 - Tečajevi banaka su informativni; u appu napiši "informativno, provjeri u banci".
 
 ## Automatizacija (GitHub Actions)
-`.github/workflows/daily.yml`: cron `17 5 * * *` + ručni `workflow_dispatch`. Pokrene skriptu i
-commita `rates.json` **samo ako su se promijenili podaci** (`scripts/changed.py` ignorira
-`generated_at`, `fetched_at`, `elapsed_ms`… ). Posljedica: kad banke ne objave novu listu (vikend),
-nema commita, pa `generated_at` u datoteci ostaje od zadnje promjene.
+`.github/workflows/daily.yml`: cron `23 * * * *` (svaki sat) + ručni `workflow_dispatch` (= dohvati sve).
+`schedule_config.json` za svaku državu ima IANA zonu i lokalne prozore (default `07:00, 09:00, 12:00, 18:00`,
+vikendom `07:00`; prilagođeno vremenu objave, npr. ECB 16:30, CNB 14:45, BOT 18:30, JISDOR 10:30).
+Država je "due" kad je njen `checked_at` stariji od zadnjeg prozora koji je već počeo – pa propušteni / zakašnjeli
+runovi automatski nadoknade. Svaki run: učita prethodni `rates.json`, ponovno dohvati samo due države
+(ostale ostaju kakve jesu, nisu stale), osvježi njihov `checked_at`, i uvijek spoji `box_sources.json`.
+Globalni izvori (ECB, open.er-api, fawazahmed0) imaju svoje prozore (UTC 00:30, 06, 12, 15, 18; vikendom 00:30, 12).
+Commit samo ako je neka država bila due (heartbeat) ili su se podaci promijenili (`scripts/changed.py` ignorira
+vremenske oznake); inače se promjene odbace → nema praznih satnih commitova. jsDelivr purge samo za promijenjene datoteke.
+Simulacija: `python fetch_rates.py --plan --now 2026-10-12T05:23Z`.
 GitHub Pages servira iz `main` / root (`.nojekyll` isključuje Jekyll). Pages šalje
 `Access-Control-Allow-Origin: *`, pa PWA može `fetch()` direktno.
 
@@ -156,5 +163,6 @@ VietinBank (VN), ABA (KH) i Bank of Ceylon (LK) vraćaju 403/405 GitHub runnerim
 `sources_config.json` pod `box_only`: GitHub ih preskače, a dohvaća ih `run_box.sh` na zasebnom računalu
 ("box") u `box_sources.json` (commit `box: …`). Workflow ih spaja u `rates.json` / `rates/<CC>.json`
 s poljem `fetched_via:"box"`; ako su stariji od 36 h, dobiju `status:"stale"` + `last_error`.
-Cron na boxu: `47 * * * * …/run_box.sh` (pravi posao u 04:47 UTC ili kao catch-up ako su podaci > 23 h).
+Cron na boxu: `*/30 * * * * …/run_box.sh` (+ `@reboot`); `schedule_config.json` → `box` određuje što je due:
+VietinBank i ABA 07:30 i 12:00 (ICT), Bank of Ceylon 08:30 i 12:00 (IST); propušteni prozor se nadoknadi pri sljedećem pozivu.
 **Ako je box ugašen, ti izvori nakon 36 h postaju stale.**

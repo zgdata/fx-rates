@@ -1247,30 +1247,43 @@ def _find_source(key):
     return cc, None
 
 
-def box_main(a, config):
-    """Box-side run: fetch only 'box_only' sources, write box_sources.json (keeps last good data on failure)."""
+def box_main(a, config, sched, now_dt):
+    """Box-side run: fetch the due 'box_only' sources (box schedule), write box_sources.json.
+    Keeps entries of sources that were not due; keeps last good data (stale) on failure."""
     prev = {}
     try:
         with open(a.box_out, encoding="utf-8") as f:
             prev = json.load(f).get("sources", {})
     except Exception:
         pass
-    out, now = {}, now_utc()
-    for key in sorted((config.get("box_only") or {})):
+    keys = sorted(config.get("box_only") or {})
+    due = [k for k in keys if a.force or k not in prev or
+           is_due(_spec(sched, k, box=True), prev[k].get("checked_at") or prev[k].get("fetched_at"), now_dt)]
+    if a.box_due:
+        print(",".join(due))
+        return 0 if due else 1
+    if not due:
+        print("no box source due")
+        return 0
+    out, now = dict((k, prev[k]) for k in keys if k in prev), now_utc()
+    for key in due:
         cc, s = _find_source(key)
         if not s:
             print(f"  {key}: unknown source")
             continue
         res = run_source(s, cc, None)          # no config -> not skipped
         res = carry_over(res, {s["id"]: prev.get(key)} if prev.get(key) else {}, now)
+        res["checked_at"] = now
         out[key] = res
         print(f"  {key}: {res['status']} {res.get('count', '')} {res.get('error') or res.get('last_error') or ''}")
-    doc = {"generated_at": now, "fetched_on": "box", "max_age_hours": a.box_max_age_h, "sources": out}
+    doc = {"generated_at": now, "fetched_on": "box", "max_age_hours": a.box_max_age_h,
+           "next_check_at": {k: iso_utc(next_window(_spec(sched, k, box=True), now_dt)) for k in keys},
+           "sources": out}
     with open(a.box_out + ".tmp", "w", encoding="utf-8") as f:
         json.dump(doc, f, ensure_ascii=False, indent=1)
     os.replace(a.box_out + ".tmp", a.box_out)
     print(f"wrote {a.box_out} ({os.path.getsize(a.box_out)} bytes)")
-    return 0 if any(v["status"] == "ok" for v in out.values()) else 1
+    return 0 if any(out[k]["status"] == "ok" for k in due if k in out) else 1
 
 
 def merge_box_sources(doc, path, config, max_age_h):
@@ -1306,63 +1319,169 @@ def merge_box_sources(doc, path, config, max_age_h):
             c["banks"] = [e if b["id"] == sid else b for b in c["banks"]]
 
 
+# ---------------------------------------------------------------- scheduling (per-country local windows)
+def load_schedule(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _parse_iso(x):
+    try:
+        t = dt.datetime.fromisoformat(str(x).replace("Z", "+00:00"))
+        return t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)
+    except Exception:
+        return None
+
+
+def _spec(sched, key, box=False):
+    d = sched.get("default") or {}
+    if key == "global":
+        c = sched.get("global") or {}
+    elif box:
+        c = (sched.get("box") or {}).get(key) or {}
+    else:
+        c = (sched.get("countries") or {}).get(key) or {}
+    return (ZoneInfo(c.get("tz") or "UTC"),
+            c.get("windows") or d.get("windows") or ["07:00"],
+            c.get("weekend") or d.get("weekend") or c.get("windows") or d.get("windows") or ["07:00"])
+
+
+def _window_times(spec, start_day, days):
+    tz, wd, we = spec
+    out = []
+    for i in range(days):
+        day = start_day + dt.timedelta(days=i)
+        for w in (we if day.weekday() >= 5 else wd):
+            hh, mm = map(int, w.split(":"))
+            out.append(dt.datetime(day.year, day.month, day.day, hh, mm, tzinfo=tz))
+    return sorted(out)
+
+
+def last_window(spec, now):
+    """Most recent window start <= now (aware datetime)."""
+    loc = now.astimezone(spec[0]).date()
+    ws = [w for w in _window_times(spec, loc - dt.timedelta(days=3), 4) if w <= now]
+    return ws[-1] if ws else None
+
+
+def next_window(spec, now):
+    loc = now.astimezone(spec[0]).date()
+    ws = [w for w in _window_times(spec, loc, 4) if w > now]
+    return ws[0] if ws else None
+
+
+def is_due(spec, checked_at, now):
+    lw = last_window(spec, now)
+    c = _parse_iso(checked_at)
+    return c is None or (lw is not None and c < lw)
+
+
+def iso_utc(t):
+    return t.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat() if t else None
+
+
 def main():
     here = os.path.dirname(os.path.abspath(__file__))
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--out", default=os.path.join(here, "rates.json"))
     ap.add_argument("--countries-file", default=os.path.join(here, "country_currency.json"))
     ap.add_argument("--config", default=os.path.join(here, "sources_config.json"))
+    ap.add_argument("--schedule", default=os.path.join(here, "schedule_config.json"))
     ap.add_argument("--split-dir", default=None, help="dir for per-country files (default: <out dir>/rates)")
-    ap.add_argument("--only", default=None, help="comma list of country codes (testing)")
+    ap.add_argument("--only", default=None, help="comma list of country codes to (re)fetch now (testing)")
+    ap.add_argument("--all", action="store_true", help="fetch every country + global now (workflow_dispatch)")
+    ap.add_argument("--now", default=None, help="pretend current UTC time (ISO), for --plan simulation")
+    ap.add_argument("--plan", action="store_true", help="only print which countries are due, fetch nothing")
     ap.add_argument("--no-published", action="store_true", help="drop original HR 'published' numbers (smaller JSON)")
     ap.add_argument("--pretty", action="store_true")
     ap.add_argument("--box-run", action="store_true",
-                    help="fetch only the sources listed in sources_config.json 'box_only' and write --box-out")
+                    help="fetch the sources in sources_config.json 'box_only' that are due (box schedule) and write --box-out")
+    ap.add_argument("--box-due", action="store_true", help="print due box keys (comma list), exit 1 if none")
+    ap.add_argument("--force", action="store_true", help="with --box-run: fetch all box sources regardless of schedule")
     ap.add_argument("--box-out", default=os.path.join(here, "box_sources.json"))
     ap.add_argument("--box-max-age-h", type=float, default=36.0)
     a = ap.parse_args()
     config = load_config(a.config)
-    only = set(a.only.upper().split(",")) if a.only else None
-    if a.box_run:
-        return box_main(a, config)
+    sched = load_schedule(a.schedule)
+    now_dt = _parse_iso(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
+    if a.box_run or a.box_due:
+        return box_main(a, config, sched, now_dt)
+
+    prev = {}
+    try:
+        with open(a.out, encoding="utf-8") as f:
+            prev = json.load(f)
+    except Exception:
+        pass
+    pcountries = prev.get("countries") or {}
+
+    # ---- which countries are due?
+    if a.all:
+        due = list(COUNTRIES)
+        g_due = True
+    elif a.only:
+        due = [cc for cc in a.only.upper().split(",") if cc in COUNTRIES]
+        g_due = True
+    else:
+        due = [cc for cc in COUNTRIES if cc not in pcountries or
+               is_due(_spec(sched, cc), pcountries[cc].get("checked_at") or prev.get("checked_at"), now_dt)]
+        g_due = not prev.get("global_reference") or is_due(_spec(sched, "global"),
+                                                           prev.get("global_checked_at") or prev.get("checked_at"), now_dt)
+    if a.plan:
+        print(f"{iso_utc(now_dt)}  global={'due' if g_due else '-'}  due: {','.join(due) or '-'}")
+        return 0
 
     started = now_utc()
     doc = {"schema_version": 1, "generated_at": started, "checked_at": started,
            "convention": ("countries.*: value = local currency per 1 unit of foreign currency; buy = bank buys "
                           "foreign from you, sell = bank sells foreign to you; transfer = devize/chuyển khoản, "
                           "cash = efektiva/tiền mặt. global_reference: units of currency per 1 EUR (mid)."),
-           "countries": {}, "global_reference": {}}
+           "refreshed_this_run": due, "countries": {}, "global_reference": {}}
+    pidx = index_prev(prev)
 
-    # global references first (cached; also feed ECB-based and fallback country entries)
-    gref = {}
-    for key, fn, name, url in [
-        ("ecb", ecb_cached, "European Central Bank – euro foreign exchange reference rates", ECB_XML),
-        ("open_er_api", open_er_cached, "ExchangeRate-API open access (open.er-api.com)", "https://open.er-api.com/v6/latest/EUR"),
-    ]:
-        gref[key] = run_source(source(key, name, "reference", url, url, fn), "global", config)
-    iso = set((gref["open_er_api"].get("rates_per_eur") or {}).keys()) | set((gref["ecb"].get("rates_per_eur") or {}).keys())
-    gref["fawazahmed0"] = run_source(source("fawazahmed0", "fawazahmed0 currency-api (jsDelivr)", "reference",
-                                            "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json",
-                                            "https://github.com/fawazahmed0/exchange-api", lambda: fawaz(iso)), "global", config)
-    for g in gref.values():
-        g.pop("rates", None) if g.get("status") == "ok" else None
+    # ---- global references (only when due; otherwise keep previous block as-is)
+    if g_due:
+        gref = {}
+        for key, fn, name, url in [
+            ("ecb", ecb_cached, "European Central Bank – euro foreign exchange reference rates", ECB_XML),
+            ("open_er_api", open_er_cached, "ExchangeRate-API open access (open.er-api.com)", "https://open.er-api.com/v6/latest/EUR"),
+        ]:
+            gref[key] = run_source(source(key, name, "reference", url, url, fn), "global", config)
+        iso = set((gref["open_er_api"].get("rates_per_eur") or {}).keys()) | set((gref["ecb"].get("rates_per_eur") or {}).keys())
+        gref["fawazahmed0"] = run_source(source("fawazahmed0", "fawazahmed0 currency-api (jsDelivr)", "reference",
+                                                "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json",
+                                                "https://github.com/fawazahmed0/exchange-api", lambda: fawaz(iso)), "global", config)
+        for g in gref.values():
+            g.pop("rates", None) if g.get("status") == "ok" else None
+        gsub = {k[1]: v for k, v in pidx.items() if k[0] == "global"}
+        for k in list(gref):
+            gref[k] = carry_over(gref[k], gsub, started)
+        doc["global_checked_at"] = started
+    else:
+        gref = prev.get("global_reference") or {}
+        doc["global_checked_at"] = prev.get("global_checked_at") or prev.get("checked_at")
+    iso = set()
+    for k in ("open_er_api", "ecb"):
+        iso |= set(((gref.get(k) or {}).get("rates_per_eur") or {}).keys())
 
-    # all country sources in parallel (different hosts; each adapter isolated)
+    # ---- due country sources in parallel (different hosts; each adapter isolated)
     jobs = []
-    for cc, c in COUNTRIES.items():
-        if only and cc not in only:
-            continue
+    for cc in due:
+        c = COUNTRIES[cc]
         jobs.append((cc, "central", c["central_bank"]))
         jobs += [(cc, "bank", b) for b in c["banks"]]
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=int(os.environ.get("FX_WORKERS", "8"))) as ex:
         results = list(ex.map(lambda j: run_source(j[2], j[0], config), jobs))
+    fresh = {}
     for (cc, role, _), res in zip(jobs, results):
         c = COUNTRIES[cc]
-        e = doc["countries"].setdefault(cc, {"name": c["name"], "name_en": c["name_en"],
-                                             "local_currency": c["local_currency"], "central_bank": None, "banks": []})
-        # drop legacy / non-ISO codes and the local currency itself
-        if iso and res.get("rates"):
+        e = fresh.setdefault(cc, {"name": c["name"], "name_en": c["name_en"], "local_currency": c["local_currency"],
+                                  "checked_at": started, "central_bank": None, "banks": []})
+        if iso and res.get("rates"):          # drop legacy / non-ISO codes and the local currency itself
             res["rates"] = {k: v for k, v in res["rates"].items() if k in iso and k != c["local_currency"]}
             res["count"] = len(res["rates"])
         if a.no_published:
@@ -1372,36 +1491,31 @@ def main():
             e["central_bank"] = res
         else:
             e["banks"].append(res)
+    for cc, e in fresh.items():                # fallback: carry over last good data for failed sources
+        sub = {k[1]: v for k, v in pidx.items() if k[0] == cc}
+        e["central_bank"] = carry_over(e["central_bank"], sub, started)
+        e["banks"] = [carry_over(b, sub, started) for b in e["banks"]]
+    for cc in COUNTRIES:                       # keep config order; not-due countries unchanged (not stale)
+        if cc in fresh:
+            doc["countries"][cc] = fresh[cc]
+        elif cc in pcountries:
+            doc["countries"][cc] = dict(pcountries[cc])
+            doc["countries"][cc].setdefault("checked_at", prev.get("checked_at"))
     doc["global_reference"] = gref
     cc_map = load_country_currency(a.countries_file)
     if cc_map:
         doc["country_currency"] = cc_map
 
-    # ---- merge box-fetched sources (sources that block GitHub runners)
+    # ---- merge box-fetched sources every run (sources that block GitHub runners; 36 h stale rule)
     merge_box_sources(doc, a.box_out, config, a.box_max_age_h)
-
-    # ---- fallback: carry over last good data for failed sources
-    prev = {}
-    try:
-        with open(a.out, encoding="utf-8") as f:
-            prev = json.load(f)
-    except Exception:
-        pass
-    pidx = index_prev(prev)
-    now = now_utc()
-    for cc, c in doc["countries"].items():
-        sub = {k[1]: v for k, v in pidx.items() if k[0] == cc}
-        c["central_bank"] = carry_over(c["central_bank"], sub, now)
-        c["banks"] = [carry_over(b, sub, now) for b in c["banks"]]
-    gsub = {k[1]: v for k, v in pidx.items() if k[0] == "global"}
-    for k in list(gref):
-        gref[k] = carry_over(gref[k], gsub, now)
 
     doc["sanity_warnings"] = sanity(doc)
     doc["summary"] = {
         cc: {s["id"]: s["status"] for s in [c["central_bank"]] + c["banks"]} for cc, c in doc["countries"].items()
     }
     doc["summary"]["global"] = {k: v["status"] for k, v in gref.items()}
+    nxt = {cc: iso_utc(next_window(_spec(sched, cc), now_dt)) for cc in doc["countries"]}
+    doc["next_refresh_at"] = dict(nxt, _global=iso_utc(next_window(_spec(sched, "global"), now_dt)))
     doc["finished_at"] = now_utc()
 
     dump = lambda obj, path: (json.dump(obj, open(path + ".tmp", "w", encoding="utf-8"), ensure_ascii=False,
@@ -1409,31 +1523,39 @@ def main():
                               os.replace(path + ".tmp", path))
     dump(doc, a.out)
 
-    # per-country files + index (rates/<ISO2>.json, rates/index.json)
+    # per-country files + index (rates/<ISO2>.json, rates/index.json). A country file's own timestamps are that
+    # country's checked_at, so files of countries that were not refreshed stay byte-identical.
     split = a.split_dir or os.path.join(os.path.dirname(os.path.abspath(a.out)), "rates")
     os.makedirs(split, exist_ok=True)
     index = {"schema_version": 1, "generated_at": doc["generated_at"], "checked_at": doc["checked_at"],
-             "convention": doc["convention"], "global_reference_file": "global.json", "countries": {}}
+             "global_checked_at": doc["global_checked_at"], "convention": doc["convention"],
+             "global_reference_file": "global.json", "countries": {}}
     for cc, c in doc["countries"].items():
-        dump({"generated_at": doc["generated_at"], "checked_at": doc["checked_at"], "convention": doc["convention"],
-              "country": cc, **c}, os.path.join(split, f"{cc}.json"))
+        dump({"generated_at": c["checked_at"], "convention": doc["convention"], "country": cc, **c},
+             os.path.join(split, f"{cc}.json"))
         index["countries"][cc] = {"name": c["name"], "name_en": c["name_en"], "local_currency": c["local_currency"],
-                                  "file": f"{cc}.json", "sources": doc["summary"][cc]}
-    dump({"generated_at": doc["generated_at"], "global_reference": gref, "country_currency": cc_map},
+                                  "file": f"{cc}.json", "checked_at": c["checked_at"], "next_refresh_at": nxt[cc],
+                                  "sources": doc["summary"][cc]}
+    dump({"generated_at": doc["global_checked_at"], "global_reference": gref, "country_currency": cc_map},
          os.path.join(split, "global.json"))
     dump(index, os.path.join(split, "index.json"))
 
-    print(json.dumps(doc["summary"], ensure_ascii=False))
+    gho = os.environ.get("GITHUB_OUTPUT")
+    if gho:
+        with open(gho, "a") as f:
+            f.write(f"due={','.join(due)}\nglobal_due={'1' if g_due else ''}\n")
+    print(f"refreshed: {','.join(due) or '-'}  global: {'yes' if g_due else 'no'}")
+    print(json.dumps({cc: doc["summary"][cc] for cc in due + (["global"] if g_due else [])}, ensure_ascii=False))
     for cc, c in doc["countries"].items():
         for s in [c["central_bank"]] + c["banks"]:
-            if s["status"] != "ok":
+            if s["status"] != "ok" and (cc in due or s.get("fetched_via") == "box"):
                 print(f"  {cc}/{s['id']}: {s['status']} – {s.get('error') or s.get('last_error')}"
                       + (f" (data from {s.get('fetched_at')})" if s["status"] == "stale" else ""))
     if doc["sanity_warnings"]:
         print("SANITY WARNINGS:", *doc["sanity_warnings"], sep="\n  ")
     print(f"wrote {a.out} ({os.path.getsize(a.out)} bytes) + {split}/ ({len(doc['countries'])} countries)")
     ok_any = any(s["status"] in ("ok", "stale") for c in doc["countries"].values() for s in [c["central_bank"]] + c["banks"])
-    return 0 if ok_any else 1
+    return 0 if ok_any or not due else 1
 
 
 if __name__ == "__main__":

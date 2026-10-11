@@ -1,9 +1,9 @@
-name: Daily FX rates
+name: FX rates (hourly, per-country local mornings)
 
 on:
   schedule:
-    - cron: "17 5 * * *"   # 05:17 UTC daily (07:17 Zagreb summer / 06:17 winter, 12:17 Hanoi)
-  workflow_dispatch:
+    - cron: "23 * * * *"   # every hour at :23 UTC; schedule_config.json decides which countries are due
+  workflow_dispatch:        # manual run = fetch every country + global now
 
 permissions:
   contents: write
@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
 
       - uses: actions/setup-python@v5
         with:
@@ -26,27 +28,39 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Fetch rates
+      - name: Fetch due countries
+        id: fetch
         env:
           BOT_TH_TOKEN: ${{ secrets.BOT_TH_TOKEN }}
-        run: python fetch_rates.py   # Erste/OTP stay disabled (no FX_ENABLE_ERSTE / FX_OTP_BROWSER_UA)
+        # Erste/OTP stay disabled (no FX_ENABLE_ERSTE / FX_OTP_BROWSER_UA)
+        run: python fetch_rates.py ${{ github.event_name == 'workflow_dispatch' && '--all' || '' }}
 
-      - name: Commit rates (daily; heartbeat commit even if only timestamps changed)
+      - name: Commit (only if a country was checked or data changed)
+        id: commit
         run: |
           git config user.name  "fx-rates-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if python scripts/changed.py rates.json; then kind="rates"; else kind="heartbeat"; fi
-          git add rates.json rates/
-          if git diff --cached --quiet; then
-            echo "Nothing to commit."
-          else
-            git commit -m "$kind: $(date -u +%Y-%m-%dT%H:%MZ)"
-            git push
+          due="${{ steps.fetch.outputs.due }}"
+          if python scripts/changed.py rates.json; then kind="rates"; elif [ -n "$due" ]; then kind="heartbeat"; else kind=""; fi
+          if [ -z "$kind" ]; then
+            echo "Nothing due and no data change - discarding timestamp-only changes."
+            git checkout -- rates.json rates/
+            exit 0
           fi
+          git add rates.json rates/
+          if git diff --cached --quiet; then echo "Nothing to commit."; exit 0; fi
+          git commit -q -m "$kind: $(date -u +%Y-%m-%dT%H:%MZ) [${due:-box merge}]"
+          git diff --name-only HEAD~1 HEAD -- rates.json rates/ | tr '\n' ' ' > /tmp/changed_files
+          for i in 1 2 3; do
+            git push -q && break
+            echo "push failed (box may have pushed), rebasing, retry $i"; sleep 5; git pull --rebase -q
+          done
+          echo "files=$(cat /tmp/changed_files)" >> "$GITHUB_OUTPUT"
 
-      - name: Purge jsDelivr cache (best effort)
+      - name: Purge jsDelivr cache for changed files (best effort)
+        if: steps.commit.outputs.files != ''
         continue-on-error: true
         run: |
-          for f in rates.json rates/index.json rates/global.json; do
+          for f in ${{ steps.commit.outputs.files }}; do
             curl -fsS -m 20 "https://purge.jsdelivr.net/gh/${{ github.repository }}@main/$f" >/dev/null && echo "purged $f" || echo "purge failed: $f"
           done
