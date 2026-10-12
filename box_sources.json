@@ -1,10 +1,10 @@
 {
- "generated_at": "2026-10-12T06:06:55+00:00",
+ "generated_at": "2026-10-12T06:31:04+00:00",
  "fetched_on": "box",
  "max_age_hours": 36.0,
  "next_check_at": {
   "KH/aba": "2026-10-13T00:30:00+00:00",
-  "LK/boc_lk": "2026-10-12T06:30:00+00:00",
+  "LK/boc_lk": "2026-10-13T03:00:00+00:00",
   "VN/vietinbank": "2026-10-13T00:30:00+00:00"
  },
  "sources": {
@@ -172,7 +172,7 @@
    "kind": "bank",
    "url": "https://www.boc.lk/rates-tariff",
    "page_url": "https://www.boc.lk/rates-tariff",
-   "fetched_at": "2026-10-12T06:06:56+00:00",
+   "fetched_at": "2026-10-12T06:31:04+00:00",
    "published_at": null,
    "middle_source": "computed_avg_transfer",
    "note": "cash = Currency notes, transfer = Telegraphic transfers",
@@ -466,8 +466,8 @@
    },
    "status": "ok",
    "count": 26,
-   "elapsed_ms": 4645,
-   "checked_at": "2026-10-12T06:06:55+00:00"
+   "elapsed_ms": 5231,
+   "checked_at": "2026-10-12T06:31:04+00:00"
   },
   "VN/vietinbank": {
    "id": "vietinbank",
