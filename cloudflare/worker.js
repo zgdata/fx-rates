@@ -172,6 +172,24 @@ async function refresh(env, keys) {
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS" };
 
+// Hourly replacement for GitHub's unreliable schedule: dispatch daily.yml with all=false
+// (only due countries). Needs secret GH_TOKEN (fine-grained, zgdata/fx-rates, Actions RW).
+const GH_CRON = "23 * * * *";
+async function dispatchGithub(env) {
+  const r = await fetch("https://api.github.com/repos/zgdata/fx-rates/actions/workflows/daily.yml/dispatches", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.GH_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "fx-box-sources-worker",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+    body: JSON.stringify({ ref: "main", inputs: { all: "false" } }),
+  });
+  console.log("github dispatch", r.status, r.status === 204 ? "" : (await r.text()).slice(0, 300));
+  return r.status;
+}
+
 export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -192,6 +210,10 @@ export default {
     return new Response("not found", { status: 404, headers: CORS });
   },
   async scheduled(event, env, ctx) {
+    if (event.cron === GH_CRON) {
+      ctx.waitUntil(dispatchGithub(env));
+      return;
+    }
     const keys = CRON_MAP[event.cron] || Object.keys(SOURCES);
     ctx.waitUntil(refresh(env, keys).then((r) => console.log(event.cron, JSON.stringify(r.refreshed))));
   },

@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "23 * * * *"   # every hour at :23 UTC; schedule_config.json decides which countries are due
   workflow_dispatch:        # manual run = fetch every country + global now
+    inputs:
+      all:
+        description: "Fetch every country now (false = only due countries, like the hourly schedule)"
+        type: boolean
+        default: true
 
 permissions:
   contents: write
@@ -45,7 +50,7 @@ jobs:
         # Erste/OTP stay disabled (no FX_ENABLE_ERSTE / FX_OTP_BROWSER_UA)
         run: |
           BOX=box_sources.json; [ -s /tmp/box_merged.json ] && BOX=/tmp/box_merged.json
-          python fetch_rates.py --box-out "$BOX" ${{ github.event_name == 'workflow_dispatch' && '--all' || '' }}
+          python fetch_rates.py --box-out "$BOX" ${{ (github.event_name == 'workflow_dispatch' && inputs.all) && '--all' || '' }}
 
       - name: Commit (only if a country was checked or data changed)
         id: commit
