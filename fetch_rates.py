@@ -31,6 +31,7 @@ import time
 import traceback
 import xml.etree.ElementTree as ET
 from zoneinfo import ZoneInfo
+from rate_quality import ISO_CODES, apply_quality, source_quality
 
 import requests
 
@@ -171,7 +172,8 @@ def zaba():
         rates[mm.group(2)] = hr_row(int(mm.group(3)), kd, sr, pd, ke, pe)
     if not rates:
         raise RuntimeError("no rows parsed from TXT")
-    return {"valid_for": day, "url": url, "middle_source": "published", "rates": rates}
+    # The requested URL is not proof of the date of the returned list.
+    return {"valid_for": m.group(1) if m else None, "url": url, "middle_source": "published", "rates": rates}
 
 
 def otp():
@@ -386,7 +388,8 @@ def techcombank():
     pub = None
     ds = [x.get("inputDate") for x in (d.get("exchangeRate") or {}).get("data", []) if x.get("inputDate")]
     if ds:
-        pub = dt.datetime.fromisoformat(max(ds).replace("Z", "+00:00")).astimezone(TZ_VN).isoformat()
+        stamp = dt.datetime.fromisoformat(max(ds).replace("Z", "+00:00"))
+        pub = (stamp if stamp.tzinfo else stamp.replace(tzinfo=TZ_VN)).astimezone(TZ_VN).isoformat()
     return {"published_at": pub, "url": url, "middle_source": "computed_avg_transfer", "rates": rates}
 
 
@@ -1144,6 +1147,9 @@ def run_source(s, cc=None, config=None):
         out["count"] = len(res.get("rates") or res.get("rates_per_eur") or {})
         if not out["count"]:
             raise RuntimeError("source returned 0 rates")
+        schedule = load_schedule(os.path.join(os.path.dirname(__file__), "schedule_config.json"))
+        timezone = ((schedule.get("countries") or {}).get(cc) or {}).get("tz", "UTC")
+        out = source_quality(out, timezone)
     except SkipSource as e:
         out.update(status="skipped", error=str(e), rates={})
         out.pop("count", None)
@@ -1218,6 +1224,7 @@ def carry_over(new, prev_by_id, now):
         return new
     out = dict(p)                       # keeps original fetched_at, rates, valid_for, published_at ...
     out["status"] = "stale"
+    out["stale_reason"] = "download_failed"
     out["stale_since"] = p.get("stale_since") or now
     out["last_error"] = new.get("error")
     out["last_attempt_at"] = new.get("fetched_at")
@@ -1450,7 +1457,7 @@ def main():
             ("open_er_api", open_er_cached, "ExchangeRate-API open access (open.er-api.com)", "https://open.er-api.com/v6/latest/EUR"),
         ]:
             gref[key] = run_source(source(key, name, "reference", url, url, fn), "global", config)
-        iso = set((gref["open_er_api"].get("rates_per_eur") or {}).keys()) | set((gref["ecb"].get("rates_per_eur") or {}).keys())
+        iso = ISO_CODES
         gref["fawazahmed0"] = run_source(source("fawazahmed0", "fawazahmed0 currency-api (jsDelivr)", "reference",
                                                 "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/eur.json",
                                                 "https://github.com/fawazahmed0/exchange-api", lambda: fawaz(iso)), "global", config)
@@ -1463,9 +1470,7 @@ def main():
     else:
         gref = prev.get("global_reference") or {}
         doc["global_checked_at"] = prev.get("global_checked_at") or prev.get("checked_at")
-    iso = set()
-    for k in ("open_er_api", "ecb"):
-        iso |= set(((gref.get(k) or {}).get("rates_per_eur") or {}).keys())
+    iso = ISO_CODES
 
     # ---- due country sources in parallel (different hosts; each adapter isolated)
     jobs = []
@@ -1508,6 +1513,9 @@ def main():
 
     # ---- merge box-fetched sources every run (sources that block GitHub runners; 36 h stale rule)
     merge_box_sources(doc, a.box_out, config, a.box_max_age_h)
+    # Publication can age between fetch windows. Also validate Worker/box data.
+    apply_quality(doc, sched, now_dt)
+    gref = doc["global_reference"]
 
     doc["sanity_warnings"] = sanity(doc)
     doc["summary"] = {
@@ -1529,14 +1537,16 @@ def main():
     os.makedirs(split, exist_ok=True)
     index = {"schema_version": 1, "generated_at": doc["generated_at"], "checked_at": doc["checked_at"],
              "global_checked_at": doc["global_checked_at"], "convention": doc["convention"],
+             "global_quality_checked_at": doc.get("global_quality_checked_at"),
              "global_reference_file": "global.json", "countries": {}}
     for cc, c in doc["countries"].items():
         dump({"generated_at": c["checked_at"], "convention": doc["convention"], "country": cc, **c},
              os.path.join(split, f"{cc}.json"))
         index["countries"][cc] = {"name": c["name"], "name_en": c["name_en"], "local_currency": c["local_currency"],
                                   "file": f"{cc}.json", "checked_at": c["checked_at"], "next_refresh_at": nxt[cc],
+                                  "quality_checked_at": c.get("quality_checked_at"),
                                   "sources": doc["summary"][cc]}
-    dump({"generated_at": doc["global_checked_at"], "global_reference": gref, "country_currency": cc_map},
+    dump({"generated_at": doc["global_checked_at"], "quality_checked_at": doc.get("global_quality_checked_at"), "global_reference": doc["global_reference"], "country_currency": cc_map},
          os.path.join(split, "global.json"))
     dump(index, os.path.join(split, "index.json"))
 

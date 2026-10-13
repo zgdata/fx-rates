@@ -33,6 +33,9 @@ jobs:
 
       - run: pip install -r requirements.txt
 
+      - name: Validate source-date and currency quality rules
+        run: python -m unittest discover -s tests -v
+
       - name: Get Cloudflare Worker box sources (VietinBank, ABA, BoC) and merge with box_sources.json
         continue-on-error: true
         run: |

@@ -170,3 +170,39 @@ VietinBank i ABA 07:30 i 12:00 (ICT), Bank of Ceylon 08:30 i 12:00 (IST); propu�
 (`fetched_via:"cloudflare"`). Workflow ga prije `fetch_rates.py` povuče (greška se tolerira) i `scripts/merge_cf.py`
 ga spoji s commitanim `box_sources.json` (po izvoru pobjeđuje najnoviji `ok` unos). Box cron ostaje kao backup.
 Izvori postaju stale tek ako ni Worker ni box nisu imali uspješan dohvat 36 h.
+
+## Source date and currency quality
+
+`rate_quality.py` runs after every adapter and again after merging cached or
+Worker/box sources, including countries which were not due for another fetch.
+It uses the source country’s IANA timezone and the active SIX ISO 4217 list in
+`iso_4217.json` (published 2026-09-17), rather than inferring valid codes from a
+provider’s feed. Removed aliases/retired codes are listed in
+`excluded_currency_codes`; they are never converted into a different currency.
+
+- A successful download does not make an old publication fresh. Publications
+  and last successful downloads older than 24 hours have `status: stale`.
+- A date-only `valid_for` is compared by local calendar day; it becomes stale
+  after the following day. No midnight publication timestamp is invented.
+- Missing/unparseable `valid_for` and `published_at` produce `freshness: unknown`
+  and `status: stale`. Values remain available, with an explicit warning.
+- A future effective date or publication timestamp is quarantined as `error`.
+  A timestamp has five minutes of clock tolerance; effective dates have no
+  next-day tolerance. These values must not be used for current conversion.
+- `freshness` is `current`, `stale`, `unknown` or `future`. Retrieval failures
+  remain separate from date warnings (`stale_reason: download_failed`).
+- Existing `fetched_at`, `checked_at`, `valid_for`, and `published_at` retain
+  their meanings. `source_date`, `date_precision`, and `source_timezone` state
+  what is known about publication. `quality_checked_at` (per country/global)
+  and `global_quality_checked_at` (index/aggregate) signal changes made by
+  validation without pretending to have fetched the bank again.
+
+Consumers should poll quality revisions as well as original backend checks,
+but never replace a newer bank fetch with an older document merely because
+its validation timestamp is later. Recheck dates on offline cached data.
+Keep `skipped`/`error` distinctions, and do not treat these checks as a saved
+AI review. Tests run before the scheduled fetch:
+
+```sh
+python -m unittest discover -s tests -v
+```
